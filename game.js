@@ -12,7 +12,7 @@ var Game = /** @class */ (function () {
         this._scene = new BABYLON.Scene(this._engine);
         this._utilLayer = new BABYLON.UtilityLayerRenderer(this._scene);
         // Create a FreeCamera, and set its position to (x:0, y:5, z:-10).
-        this._camera = new BABYLON.FreeCamera('camera1', new BABYLON.Vector3(0, 5, -10), this._scene);
+        this._camera = new BABYLON.FreeCamera('camera1', new BABYLON.Vector3(11, 65, -27), this._scene);
         // Target the camera to scene origin.
         this._camera.setTarget(BABYLON.Vector3.Zero());
         // Attach the camera to the canvas.
@@ -23,6 +23,7 @@ var Game = /** @class */ (function () {
         this._hexGrid.generate();
         this._hexMapEditor = new HexMapEditor(this._hexGrid);
         window.editor = this._hexMapEditor;
+        this._scene.debugLayer.show();
     };
     Game.prototype.doRender = function () {
         var _this = this;

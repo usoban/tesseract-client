@@ -14,7 +14,7 @@ class HexMetrics {
     private static corners: Array<BABYLON.Vector3> = [
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
         new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
-        new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),        
+        new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),
         new BABYLON.Vector3(0.0, 0.0, -HexMetrics.outerRadius),
         new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),
         new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
@@ -163,7 +163,7 @@ class HexCellColor {
     ];
 
     public static default() {
-        return HexCellColor.colors[0];
+        return HexCellColor.PASTEL_BLUE;
     }
 
     public static random(): BABYLON.Color4 {
@@ -255,6 +255,8 @@ class HexCell extends BABYLON.Mesh {
 }
 
 class HexMesh extends BABYLON.Mesh {
+    private static _material: BABYLON.StandardMaterial = null;
+
     private _vertices: Array<number> = [];
     private _triangles: Array<number> = [];
     private _colors: Array<number> = [];
@@ -262,17 +264,26 @@ class HexMesh extends BABYLON.Mesh {
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
 
-        let mat = new BABYLON.StandardMaterial("material", scene);
-        mat.backFaceCulling = false;
-        mat.emissiveColor = BABYLON.Color3.White();
-        // mat.specularColor = BABYLON.Color3.Black();
-        // mat.wireframe = true;
-        this.material = mat;
+        this.material = HexMesh.getDefaultMaterial(scene);
 
         this._setReady(false);
     }
 
-    triangulate(cells: HexCell[]) {        
+    private static getDefaultMaterial(scene: BABYLON.Scene) {
+        if (HexMesh._material === null) {
+            let mat = new BABYLON.StandardMaterial("material", scene);
+            mat.backFaceCulling = false;
+            mat.emissiveColor = BABYLON.Color3.FromHexString("#E6E6E6");
+            mat.diffuseColor = BABYLON.Color3.White();
+            // mat.specularColor = BABYLON.Color3.Black();
+            // mat.wireframe = true;
+            HexMesh._material = mat;
+        }
+
+        return HexMesh._material;
+    } 
+
+    triangulate(cells: HexCell[]) {
         this._vertices = [];
         this._triangles = [];
         this._colors = [];
@@ -283,8 +294,9 @@ class HexMesh extends BABYLON.Mesh {
             }
         }
 
-        let vertexData = new BABYLON.VertexData();
-        let normals = [];
+        let 
+            vertexData = new BABYLON.VertexData(),
+            normals = [];
 
         BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals);
         
@@ -299,9 +311,8 @@ class HexMesh extends BABYLON.Mesh {
     }
 
     triangulateCell(direction: HexDirection, cell: HexCell): void {
-        let center = cell.cellPosition.clone();
-
         let
+            center = cell.cellPosition.clone(),
             v1 = center.add(HexMetrics.getFirstSolidCorner(direction)),
             v2 = center.add(HexMetrics.getSecondSolidCorner(direction));
 
@@ -376,6 +387,9 @@ class HexMesh extends BABYLON.Mesh {
                 this.triangulateCellCornerTerraces(left, leftCell, right, rightCell, bottom, bottomCell);
                 return;
             }
+
+            this.triangulateCellCornerTerracesCliff(bottom, bottomCell, left, leftCell, right, rightCell);
+            return;
         }
         if (rightEdgeType === HexEdgeType.Slope) {
             if (leftEdgeType === HexEdgeType.Flat) {
@@ -424,6 +438,57 @@ class HexMesh extends BABYLON.Mesh {
 
         this.addQuad(v3, v4, left, right);
         this.addQuadColor(c3, c4, leftCell.color, rightCell.color);
+    }
+
+    triangulateCellCornerTerracesCliff(
+        begin: BABYLON.Vector3, beginCell: HexCell,
+        left: BABYLON.Vector3, leftCell: HexCell,
+        right: BABYLON.Vector3, rightCell: HexCell
+    ) {
+        let
+            b = 1.0 / (rightCell.elevation - beginCell.elevation),
+            boundry = BABYLON.Vector3.Lerp(begin, right, b),
+            boundryColor = BABYLON.Color4.Lerp(beginCell.color, rightCell.color, b);
+
+        this.trinagulateCellBoundryTriangle(begin, beginCell, left, leftCell, boundry, boundryColor);
+
+        if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
+            this.trinagulateCellBoundryTriangle(left, leftCell, right, rightCell, boundry, boundryColor);
+        } else {
+            this.addTriangle(left, right, boundry);
+            this.addTriangleColor(leftCell.color, rightCell.color, boundryColor);
+        }
+    }
+
+    trinagulateCellBoundryTriangle(
+        begin: BABYLON.Vector3, beginCell: HexCell,
+        left: BABYLON.Vector3, leftCell: HexCell,
+        boundry: BABYLON.Vector3, boundryColor: BABYLON.Color4
+    ) {
+        let
+            v2 = HexMetrics.terraceLerp(begin, left, 1),
+            c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1);
+
+        this.addTriangle(begin, v2, boundry);
+        this.addTriangleColor(beginCell.color, c2, boundryColor);
+
+        let 
+            i: number,
+            v1: BABYLON.Vector3,
+            c1: BABYLON.Color4;
+
+        for (i = 2; i < HexMetrics.terraceSteps; i++) {
+            v1 = v2;
+            c1 = c2;
+            v2 = HexMetrics.terraceLerp(begin, left, i);
+            c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, i);
+
+            this.addTriangle(v1, v2, boundry);
+            this.addTriangleColor(c1, c2, boundryColor);
+        }
+
+        this.addTriangle(v2, left, boundry);
+        this.addTriangleColor(c2, leftCell.color, boundryColor);
     }
 
     triangulateCellEdgeTerraces(
@@ -532,8 +597,25 @@ class HexGrid {
     private _scene: BABYLON.Scene;
     private _hexMesh: HexMesh;
 
-    public defaultColor: BABYLON.Color4 = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
-    public touchedColor: BABYLON.Color4 = BABYLON.Color4.FromColor3(BABYLON.Color3.Magenta());
+    public defaultColor: BABYLON.Color4 = HexCellColor.PASTEL_BLUE;
+
+    public static defaultGridonfiguration = {
+        "(0, -1, 1)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(2, -3, 1)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(3, -4, 1)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(-1, -1, 2)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(3, -5, 2)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(4, -6, 2)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(-1, -2, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(0, -3, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(1, -4, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+        "(2, -5, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
+
+        "(1, -2, 1)": {color: HexCellColor.PASTEL_GREEN, elevation: 2},
+        "(0, -2, 2)": {color: HexCellColor.PASTEL_GREEN, elevation: 2},
+        "(1, -3, 2)": {color: HexCellColor.PASTEL_GREEN, elevation: 2},
+        "(2, -4, 2)": {color: HexCellColor.PASTEL_GREEN, elevation: 2}
+    };
 
     constructor(scene: BABYLON.Scene) {
         this._scene = scene;
@@ -559,24 +641,12 @@ class HexGrid {
         this._hexMesh.triangulate(this.cells);
     }
 
-    touchCell(position: BABYLON.Vector3) {
-        this.colorCell(position, this.touchedColor);
-    }
-
     getCell(position: BABYLON.Vector3) {
         let 
             coordinates = HexCooridnates.fromPosition(position),
             index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z/2.0);
 
         return this.cells[index];
-    }
-
-    private colorCell(position: BABYLON.Vector3, color: BABYLON.Color4) {
-        let 
-            coordinates = HexCooridnates.fromPosition(position),
-            index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z/2.0);
-
-        this.cells[index].color = this.touchedColor;
     }
 
     makeCell(x: number, z: number, i: number): HexCell {
@@ -601,7 +671,14 @@ class HexGrid {
         material.specularColor = BABYLON.Color3.Black();
 
         cell.material = material;
-        cell.color = HexCellColor.random();
+
+        if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
+            let cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
+            cell.color = cfg.color;
+            cell.elevation = cfg.elevation;
+        } else {
+            cell.color = HexCellColor.default();
+        }
 
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i-1]);

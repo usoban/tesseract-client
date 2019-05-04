@@ -5,7 +5,7 @@ var __extends = (this && this.__extends) || (function () {
             ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
             function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
         return extendStatics(d, b);
-    };
+    }
     return function (d, b) {
         extendStatics(d, b);
         function __() { this.constructor = d; }
@@ -55,7 +55,7 @@ var HexMetrics = /** @class */ (function () {
     HexMetrics.innerRadius = HexMetrics.outerRadius * 0.866025404;
     HexMetrics.solidFactor = 0.75;
     HexMetrics.blendFactor = 1.0 - HexMetrics.solidFactor;
-    HexMetrics.elevationStep = 10.0;
+    HexMetrics.elevationStep = 5.0;
     HexMetrics.terracesPerSlope = 2;
     HexMetrics.terraceSteps = HexMetrics.terracesPerSlope * 2 + 1;
     HexMetrics.horizontalTerraceStepSize = (1.0 / HexMetrics.terraceSteps);
@@ -140,7 +140,7 @@ var HexCellColor = /** @class */ (function () {
     function HexCellColor() {
     }
     HexCellColor.default = function () {
-        return HexCellColor.colors[0];
+        return HexCellColor.PASTEL_BLUE;
     };
     HexCellColor.random = function () {
         return HexCellColor.colors[Math.floor(Math.random() * HexCellColor.colors.length)];
@@ -238,15 +238,22 @@ var HexMesh = /** @class */ (function (_super) {
         _this._vertices = [];
         _this._triangles = [];
         _this._colors = [];
-        var mat = new BABYLON.StandardMaterial("material", scene);
-        mat.backFaceCulling = false;
-        mat.emissiveColor = BABYLON.Color3.White();
-        // mat.specularColor = BABYLON.Color3.Black();
-        // mat.wireframe = true;
-        _this.material = mat;
+        _this.material = HexMesh.getDefaultMaterial(scene);
         _this._setReady(false);
         return _this;
     }
+    HexMesh.getDefaultMaterial = function (scene) {
+        if (HexMesh._material === null) {
+            var mat = new BABYLON.StandardMaterial("material", scene);
+            mat.backFaceCulling = false;
+            mat.emissiveColor = BABYLON.Color3.FromHexString("#E6E6E6");
+            mat.diffuseColor = BABYLON.Color3.White();
+            // mat.specularColor = BABYLON.Color3.Black();
+            // mat.wireframe = true;
+            HexMesh._material = mat;
+        }
+        return HexMesh._material;
+    };
     HexMesh.prototype.triangulate = function (cells) {
         this._vertices = [];
         this._triangles = [];
@@ -256,8 +263,7 @@ var HexMesh = /** @class */ (function (_super) {
                 this.triangulateCell(direction, cells[i]);
             }
         }
-        var vertexData = new BABYLON.VertexData();
-        var normals = [];
+        var vertexData = new BABYLON.VertexData(), normals = [];
         BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals);
         vertexData.positions = this._vertices;
         vertexData.indices = this._triangles;
@@ -267,8 +273,7 @@ var HexMesh = /** @class */ (function (_super) {
         this._setReady(true);
     };
     HexMesh.prototype.triangulateCell = function (direction, cell) {
-        var center = cell.cellPosition.clone();
-        var v1 = center.add(HexMetrics.getFirstSolidCorner(direction)), v2 = center.add(HexMetrics.getSecondSolidCorner(direction));
+        var center = cell.cellPosition.clone(), v1 = center.add(HexMetrics.getFirstSolidCorner(direction)), v2 = center.add(HexMetrics.getSecondSolidCorner(direction));
         this.addTriangle(center, v1, v2);
         this.addSingleTriangleColor(cell.color);
         if (direction <= HexDirection.SE) {
@@ -320,6 +325,8 @@ var HexMesh = /** @class */ (function (_super) {
                 this.triangulateCellCornerTerraces(left, leftCell, right, rightCell, bottom, bottomCell);
                 return;
             }
+            this.triangulateCellCornerTerracesCliff(bottom, bottomCell, left, leftCell, right, rightCell);
+            return;
         }
         if (rightEdgeType === HexEdgeType.Slope) {
             if (leftEdgeType === HexEdgeType.Flat) {
@@ -349,6 +356,33 @@ var HexMesh = /** @class */ (function (_super) {
         }
         this.addQuad(v3, v4, left, right);
         this.addQuadColor(c3, c4, leftCell.color, rightCell.color);
+    };
+    HexMesh.prototype.triangulateCellCornerTerracesCliff = function (begin, beginCell, left, leftCell, right, rightCell) {
+        var b = 1.0 / (rightCell.elevation - beginCell.elevation), boundry = BABYLON.Vector3.Lerp(begin, right, b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, rightCell.color, b);
+        this.trinagulateCellBoundryTriangle(begin, beginCell, left, leftCell, boundry, boundryColor);
+        if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
+            this.trinagulateCellBoundryTriangle(left, leftCell, right, rightCell, boundry, boundryColor);
+        }
+        else {
+            this.addTriangle(left, right, boundry);
+            this.addTriangleColor(leftCell.color, rightCell.color, boundryColor);
+        }
+    };
+    HexMesh.prototype.trinagulateCellBoundryTriangle = function (begin, beginCell, left, leftCell, boundry, boundryColor) {
+        var v2 = HexMetrics.terraceLerp(begin, left, 1), c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1);
+        this.addTriangle(begin, v2, boundry);
+        this.addTriangleColor(beginCell.color, c2, boundryColor);
+        var i, v1, c1;
+        for (i = 2; i < HexMetrics.terraceSteps; i++) {
+            v1 = v2;
+            c1 = c2;
+            v2 = HexMetrics.terraceLerp(begin, left, i);
+            c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, i);
+            this.addTriangle(v1, v2, boundry);
+            this.addTriangleColor(c1, c2, boundryColor);
+        }
+        this.addTriangle(v2, left, boundry);
+        this.addTriangleColor(c2, leftCell.color, boundryColor);
     };
     HexMesh.prototype.triangulateCellEdgeTerraces = function (beginLeft, beginRight, beginCell, endLeft, endRight, endCell) {
         var v3 = HexMetrics.terraceLerp(beginLeft, endLeft, 1), v4 = HexMetrics.terraceLerp(beginRight, endRight, 1), c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, 1);
@@ -424,14 +458,14 @@ var HexMesh = /** @class */ (function (_super) {
         this._colors.push(color.b);
         this._colors.push(color.a);
     };
+    HexMesh._material = null;
     return HexMesh;
 }(BABYLON.Mesh));
 var HexGrid = /** @class */ (function () {
     function HexGrid(scene) {
         this.width = 6;
         this.height = 6;
-        this.defaultColor = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
-        this.touchedColor = BABYLON.Color4.FromColor3(BABYLON.Color3.Magenta());
+        this.defaultColor = HexCellColor.PASTEL_BLUE;
         this._scene = scene;
     }
     HexGrid.prototype.generate = function () {
@@ -450,16 +484,9 @@ var HexGrid = /** @class */ (function () {
     HexGrid.prototype.refresh = function () {
         this._hexMesh.triangulate(this.cells);
     };
-    HexGrid.prototype.touchCell = function (position) {
-        this.colorCell(position, this.touchedColor);
-    };
     HexGrid.prototype.getCell = function (position) {
         var coordinates = HexCooridnates.fromPosition(position), index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z / 2.0);
         return this.cells[index];
-    };
-    HexGrid.prototype.colorCell = function (position, color) {
-        var coordinates = HexCooridnates.fromPosition(position), index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z / 2.0);
-        this.cells[index].color = this.touchedColor;
     };
     HexGrid.prototype.makeCell = function (x, z, i) {
         var cell = new HexCell("hex_cell_" + x + "_" + z, this._scene), cellPosition = new BABYLON.Vector3((x + z * 0.5 - Math.floor(z / 2)) * (HexMetrics.innerRadius * 2.0), 0.0, z * (HexMetrics.outerRadius * 1.5));
@@ -472,7 +499,14 @@ var HexGrid = /** @class */ (function () {
         material.opacityTexture = textTexture;
         material.specularColor = BABYLON.Color3.Black();
         cell.material = material;
-        cell.color = HexCellColor.random();
+        if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
+            var cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
+            cell.color = cfg.color;
+            cell.elevation = cfg.elevation;
+        }
+        else {
+            cell.color = HexCellColor.default();
+        }
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i - 1]);
         }
@@ -506,6 +540,22 @@ var HexGrid = /** @class */ (function () {
         var fontSize = Math.floor(DTw / ratio);
         textTexture.drawText(txt, null, null, fontSize + "px bold monospace", "black", null);
         return textTexture;
+    };
+    HexGrid.defaultGridonfiguration = {
+        "(0, -1, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(2, -3, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(3, -4, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(-1, -1, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(3, -5, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(4, -6, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(-1, -2, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(0, -3, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(1, -4, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(2, -5, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+        "(1, -2, 1)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
+        "(0, -2, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
+        "(1, -3, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
+        "(2, -4, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 }
     };
     return HexGrid;
 }());

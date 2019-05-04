@@ -1,5 +1,4 @@
 ///<reference path="babylon.d.ts" />
-///<reference path="hex_grid_builder.ts" />
 ///<reference path="hex.ts" />
 
 class Game {
@@ -9,7 +8,6 @@ class Game {
     private _utilLayer: BABYLON.UtilityLayerRenderer;
     private _camera: BABYLON.FreeCamera;
     private _light: BABYLON.Light;
-    // private _gridBuilder: HexGridBuilder;
     private _hexGrid: HexGrid;
     private _hexMapEditor: HexMapEditor;
 
@@ -26,7 +24,7 @@ class Game {
         this._utilLayer = new BABYLON.UtilityLayerRenderer(this._scene);
 
         // Create a FreeCamera, and set its position to (x:0, y:5, z:-10).
-        this._camera = new BABYLON.FreeCamera('camera1', new BABYLON.Vector3(0, 5,-10), this._scene);
+        this._camera = new BABYLON.FreeCamera('camera1', new BABYLON.Vector3(11, 65,-27), this._scene);
 
         // Target the camera to scene origin.
         this._camera.setTarget(BABYLON.Vector3.Zero());
@@ -43,6 +41,8 @@ class Game {
         this._hexMapEditor = new HexMapEditor(this._hexGrid);
 
         (<any>window).editor = this._hexMapEditor;
+
+        this._scene.debugLayer.show();
     }
 
     doRender() : void {
