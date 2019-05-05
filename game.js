@@ -1,5 +1,4 @@
 ///<reference path="babylon.d.ts" />
-///<reference path="hex_grid_builder.ts" />
 ///<reference path="hex.ts" />
 var Game = /** @class */ (function () {
     function Game(canvasElement) {
@@ -23,7 +22,7 @@ var Game = /** @class */ (function () {
         this._hexGrid.generate();
         this._hexMapEditor = new HexMapEditor(this._hexGrid);
         window.editor = this._hexMapEditor;
-        this._scene.debugLayer.show();
+        // this._scene.debugLayer.show();
     };
     Game.prototype.doRender = function () {
         var _this = this;

@@ -42,7 +42,7 @@ class Game {
 
         (<any>window).editor = this._hexMapEditor;
 
-        this._scene.debugLayer.show();
+        // this._scene.debugLayer.show();
     }
 
     doRender() : void {

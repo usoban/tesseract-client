@@ -5,7 +5,7 @@ var __extends = (this && this.__extends) || (function () {
             ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
             function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
         return extendStatics(d, b);
-    }
+    };
     return function (d, b) {
         extendStatics(d, b);
         function __() { this.constructor = d; }
@@ -319,23 +319,34 @@ var HexMesh = /** @class */ (function (_super) {
         if (leftEdgeType === HexEdgeType.Slope) {
             if (rightEdgeType === HexEdgeType.Slope) {
                 this.triangulateCellCornerTerraces(bottom, bottomCell, left, leftCell, right, rightCell);
-                return;
             }
-            if (rightEdgeType === HexEdgeType.Flat) {
+            else if (rightEdgeType === HexEdgeType.Flat) {
                 this.triangulateCellCornerTerraces(left, leftCell, right, rightCell, bottom, bottomCell);
-                return;
             }
-            this.triangulateCellCornerTerracesCliff(bottom, bottomCell, left, leftCell, right, rightCell);
-            return;
+            else {
+                this.triangulateCellCornerTerracesCliff(bottom, bottomCell, left, leftCell, right, rightCell);
+            }
         }
-        if (rightEdgeType === HexEdgeType.Slope) {
+        else if (rightEdgeType === HexEdgeType.Slope) {
             if (leftEdgeType === HexEdgeType.Flat) {
                 this.triangulateCellCornerTerraces(right, rightCell, bottom, bottomCell, left, leftCell);
-                return;
+            }
+            else {
+                this.triangulateCellCornerCliffTerraces(bottom, bottomCell, left, leftCell, right, rightCell);
             }
         }
-        this.addTriangle(bottom, left, right);
-        this.addTriangleColor(bottomCell.color, leftCell.color, rightCell.color);
+        else if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
+            if (leftCell.elevation < rightCell.elevation) {
+                this.triangulateCellCornerCliffTerraces(right, rightCell, bottom, bottomCell, left, leftCell);
+            }
+            else {
+                this.triangulateCellCornerTerracesCliff(left, leftCell, right, rightCell, bottom, bottomCell);
+            }
+        }
+        else {
+            this.addTriangle(bottom, left, right);
+            this.addTriangleColor(bottomCell.color, leftCell.color, rightCell.color);
+        }
     };
     HexMesh.prototype.triangulateCellCornerTerraces = function (begin, beginCell, left, leftCell, right, rightCell) {
         var v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), c3 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1), c4 = HexMetrics.terraceColorLerp(beginCell.color, rightCell.color, 1);
@@ -358,8 +369,19 @@ var HexMesh = /** @class */ (function (_super) {
         this.addQuadColor(c3, c4, leftCell.color, rightCell.color);
     };
     HexMesh.prototype.triangulateCellCornerTerracesCliff = function (begin, beginCell, left, leftCell, right, rightCell) {
-        var b = 1.0 / (rightCell.elevation - beginCell.elevation), boundry = BABYLON.Vector3.Lerp(begin, right, b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, rightCell.color, b);
+        var b = Math.abs(1.0 / (rightCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(begin, right, b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, rightCell.color, b);
         this.trinagulateCellBoundryTriangle(begin, beginCell, left, leftCell, boundry, boundryColor);
+        if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
+            this.trinagulateCellBoundryTriangle(left, leftCell, right, rightCell, boundry, boundryColor);
+        }
+        else {
+            this.addTriangle(left, right, boundry);
+            this.addTriangleColor(leftCell.color, rightCell.color, boundryColor);
+        }
+    };
+    HexMesh.prototype.triangulateCellCornerCliffTerraces = function (begin, beginCell, left, leftCell, right, rightCell) {
+        var b = Math.abs(1.0 / (leftCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(begin, left, b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, leftCell.color, b);
+        this.trinagulateCellBoundryTriangle(right, rightCell, begin, beginCell, boundry, boundryColor);
         if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
             this.trinagulateCellBoundryTriangle(left, leftCell, right, rightCell, boundry, boundryColor);
         }
