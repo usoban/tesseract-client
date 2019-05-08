@@ -52,6 +52,8 @@ HexMetrics.verticalTerraceStepSize = (1.0 / (HexMetrics.terracesPerSlope + 1));
 HexMetrics.noiseScale = 0.7;
 HexMetrics.cellPerturbStrength = 4.0;
 HexMetrics.elevationPerturbStrength = 1.5;
+HexMetrics.chunkSizeX = 5;
+HexMetrics.chunkSizeZ = 5;
 HexMetrics.corners = [
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
     new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
@@ -219,7 +221,7 @@ class HexCell extends BABYLON.Mesh {
     constructor(name, scene) {
         super(name, scene);
         this.neighbors = new Array(6);
-        this._elevation = 0;
+        this._elevation = Number.MIN_VALUE;
         let options = {
             size: 10,
             width: 10,
@@ -240,11 +242,15 @@ class HexCell extends BABYLON.Mesh {
         return this._elevation;
     }
     set elevation(elevation) {
+        if (this._elevation === elevation) {
+            return;
+        }
         this._elevation = elevation;
         this._cellPosition.y = elevation * HexMetrics.elevationStep;
         this._cellPosition.y +=
             (HexMetrics.sampleNoise(this._cellPosition).y * 2.0 - 1.0) * HexMetrics.elevationPerturbStrength;
         this.refreshPosition();
+        this.refresh();
     }
     get cellPosition() {
         return this._cellPosition;
@@ -252,6 +258,16 @@ class HexCell extends BABYLON.Mesh {
     set cellPosition(position) {
         this._cellPosition = position.clone();
         this.refreshPosition();
+    }
+    get color() {
+        return this._color;
+    }
+    set color(color) {
+        if (this._color === color) {
+            return;
+        }
+        this._color = color;
+        this.refresh();
     }
     // Sets mesh render position from cellPosition (renders it slightly above).
     refreshPosition() {
@@ -263,6 +279,19 @@ class HexCell extends BABYLON.Mesh {
     }
     getEdgeTypeForCell(cell) {
         return HexMetrics.getEdgeType(this.elevation, cell.elevation);
+    }
+    refresh() {
+        if (!this.chunk)
+            return;
+        this.chunk.refresh();
+        // Refresh all neighbor cell chunks which are not the same chunk as we're in.
+        let n;
+        for (let i = 0; i < this.neighbors.length; i++) {
+            n = this.neighbors[i];
+            if (n && n.chunk != this.chunk) {
+                n.chunk.refresh();
+            }
+        }
     }
 }
 HexCell.CELL_OVERLAY_ELEVATION = 0.1;
@@ -287,6 +316,9 @@ class EdgeVertices {
 class HexMesh extends BABYLON.Mesh {
     constructor(name, scene) {
         super(name, scene);
+        // private static _vertices: Array<number> = [];
+        // private static _triangles: Array<number> = [];
+        // private static _colors: Array<number> = [];
         this._vertices = [];
         this._triangles = [];
         this._colors = [];
@@ -309,6 +341,12 @@ class HexMesh extends BABYLON.Mesh {
         let sample = HexMetrics.sampleNoise(position);
         return new BABYLON.Vector3(position.x + (sample.x * 2.0 - 1.0) * HexMetrics.cellPerturbStrength, position.y, position.z + (sample.z * 2.0 - 1.0) * HexMetrics.cellPerturbStrength);
     }
+    // public static triangulate(mesh: HexMesh, cells: HexCell[]) {
+    //     HexMesh._vertices = [];
+    //     HexMesh._triangles = [];
+    //     HexMesh._colors = [];
+    //     mesh.triangulate(cells);
+    // }
     triangulate(cells) {
         this._vertices = [];
         this._triangles = [];
@@ -556,12 +594,29 @@ class HexMesh extends BABYLON.Mesh {
     }
 }
 HexMesh._material = null;
+class HexGridChunk {
+    constructor(hexMesh) {
+        this.hexMesh = hexMesh;
+        this.cells = new Array(HexMetrics.chunkSizeX * HexMetrics.chunkSizeZ);
+    }
+    addCell(index, cell) {
+        this.cells[index] = cell;
+        cell.chunk = this;
+    }
+    refresh() {
+        this.hexMesh.triangulate(this.cells);
+    }
+}
 class HexGrid {
     constructor(scene) {
-        this.width = 6;
-        this.height = 6;
+        this.cellCountX = 6;
+        this.cellCountZ = 6;
+        this.chunkCountX = 7;
+        this.chunkCountZ = 7;
         this.defaultColor = HexCellColor.PASTEL_BLUE;
         this._scene = scene;
+        this.cellCountX = this.chunkCountX * HexMetrics.chunkSizeX;
+        this.cellCountZ = this.chunkCountZ * HexMetrics.chunkSizeZ;
     }
     generate() {
         let texture = new BABYLON.Texture('./assets/gfx/material/noise.png', this._scene, false, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, null, null, null, null, BABYLON.Engine.TEXTUREFORMAT_RGBA);
@@ -580,24 +635,33 @@ class HexGrid {
             bilinearTexture = new Texture(Float32Array.from(noiseTexture.data), noiseTexture.width, noiseTexture.height);
             Texture.bilinearFiltered(noiseTexture, bilinearTexture, 1.0);
             HexMetrics.noiseTexture = bilinearTexture;
-            this.cells = new Array(this.width * this.height);
-            let i = 0;
-            for (let z = 0; z < this.height; z++) {
-                for (let x = 0; x < this.width; x++) {
-                    this.cells[i] = this.makeCell(x, z, i);
-                    i++;
-                }
-            }
-            this._hexMesh = new HexMesh("hex_mesh", this._scene);
-            this.refresh();
-            this._hexMesh.isVisible = true;
+            this.makeChunks();
+            this.makeCells();
+            this.chunks.forEach(c => c.refresh());
         });
     }
-    refresh() {
-        this._hexMesh.triangulate(this.cells);
+    makeCells() {
+        this.cells = new Array(this.cellCountX * this.cellCountZ);
+        let i = 0;
+        for (let z = 0; z < this.cellCountZ; z++) {
+            for (let x = 0; x < this.cellCountX; x++) {
+                this.cells[i] = this.makeCell(x, z, i);
+                i++;
+            }
+        }
+    }
+    makeChunks() {
+        this.chunks = new Array(this.chunkCountX * this.chunkCountZ);
+        let i = 0;
+        for (let z = 0; z < this.chunkCountZ; z++) {
+            for (let x = 0; x < this.chunkCountX; x++) {
+                this.chunks[i] = new HexGridChunk(new HexMesh(`hex_mesh_${x}_${z}`, this._scene));
+                i++;
+            }
+        }
     }
     getCell(position) {
-        let coordinates = HexCooridnates.fromPosition(position), index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z / 2.0);
+        let coordinates = HexCooridnates.fromPosition(position), index = coordinates.x + coordinates.z * this.cellCountX + Math.floor(coordinates.z / 2.0);
         return this.cells[index];
     }
     makeCell(x, z, i) {
@@ -625,18 +689,19 @@ class HexGrid {
         }
         if (z > 0) {
             if ((z & 1) === 0) {
-                cell.setNeighbor(HexDirection.SE, this.cells[i - this.width]);
+                cell.setNeighbor(HexDirection.SE, this.cells[i - this.cellCountX]);
                 if (x > 0) {
-                    cell.setNeighbor(HexDirection.SW, this.cells[i - this.width - 1]);
+                    cell.setNeighbor(HexDirection.SW, this.cells[i - this.cellCountX - 1]);
                 }
             }
             else {
-                cell.setNeighbor(HexDirection.SW, this.cells[i - this.width]);
-                if (x < this.width - 1) {
-                    cell.setNeighbor(HexDirection.SE, this.cells[i - this.width + 1]);
+                cell.setNeighbor(HexDirection.SW, this.cells[i - this.cellCountX]);
+                if (x < this.cellCountX - 1) {
+                    cell.setNeighbor(HexDirection.SE, this.cells[i - this.cellCountX + 1]);
                 }
             }
         }
+        this.addCellToChunk(x, z, cell);
         return cell;
     }
     makeCellText(txt) {
@@ -653,6 +718,10 @@ class HexGrid {
         let fontSize = Math.floor(DTw / ratio);
         textTexture.drawText(txt, null, null, `${fontSize}px bold monospace`, "black", null);
         return textTexture;
+    }
+    addCellToChunk(x, z, cell) {
+        let chunkX = ~~(x / HexMetrics.chunkSizeX), chunkZ = ~~(z / HexMetrics.chunkSizeZ), chunk = this.chunks[chunkX + chunkZ * this.chunkCountX], localX = x - chunkX * HexMetrics.chunkSizeX, localZ = z - chunkZ * HexMetrics.chunkSizeZ;
+        chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
 }
 // public static defaultGridonfiguration = {};
@@ -684,7 +753,6 @@ class HexMapEditor {
     editCell(cell) {
         cell.color = this.activeColor;
         cell.elevation = this.activeElevation;
-        this.grid.refresh();
     }
     setActiveColor(color) {
         this.activeColor = color;
