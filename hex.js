@@ -1,76 +1,128 @@
 ///<reference path="babylon.d.ts" />
-var __extends = (this && this.__extends) || (function () {
-    var extendStatics = function (d, b) {
-        extendStatics = Object.setPrototypeOf ||
-            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
-            function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
-        return extendStatics(d, b);
-    };
-    return function (d, b) {
-        extendStatics(d, b);
-        function __() { this.constructor = d; }
-        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
-    };
-})();
-var HexMetrics = /** @class */ (function () {
-    function HexMetrics() {
-    }
-    HexMetrics.getFirstCorner = function (direction) {
+class HexMetrics {
+    static getFirstCorner(direction) {
         return HexMetrics.corners[direction];
-    };
-    HexMetrics.getSecondCorner = function (direction) {
+    }
+    static getSecondCorner(direction) {
         return HexMetrics.corners[direction + 1];
-    };
-    HexMetrics.getFirstSolidCorner = function (direction) {
+    }
+    static getFirstSolidCorner(direction) {
         return HexMetrics.corners[direction].scale(HexMetrics.solidFactor);
-    };
-    HexMetrics.getSecondSolidCorner = function (direction) {
+    }
+    static getSecondSolidCorner(direction) {
         return HexMetrics.corners[direction + 1].scale(HexMetrics.solidFactor);
-    };
-    HexMetrics.getBridge = function (direction) {
+    }
+    static getBridge(direction) {
         return this.corners[direction].add(this.corners[direction + 1]).scale(HexMetrics.blendFactor);
-    };
-    HexMetrics.terraceLerp = function (a, b, step) {
-        var h = step * HexMetrics.horizontalTerraceStepSize, v = ~~((step + 1) / 2.0) * HexMetrics.verticalTerraceStepSize, t = a.clone();
+    }
+    static terraceLerp(a, b, step) {
+        const h = step * HexMetrics.horizontalTerraceStepSize, v = ~~((step + 1) / 2.0) * HexMetrics.verticalTerraceStepSize, t = a.clone();
         t.x += (b.x - a.x) * h;
         t.z += (b.z - a.z) * h;
         t.y += (b.y - a.y) * v;
         return t;
-    };
-    HexMetrics.terraceColorLerp = function (a, b, step) {
-        var h = step * HexMetrics.horizontalTerraceStepSize;
+    }
+    static terraceColorLerp(a, b, step) {
+        const h = step * HexMetrics.horizontalTerraceStepSize;
         return BABYLON.Color4.Lerp(a, b, h);
-    };
-    HexMetrics.getEdgeType = function (elevation1, elevation2) {
+    }
+    static getEdgeType(elevation1, elevation2) {
         if (elevation1 === elevation2) {
             return HexEdgeType.Flat;
         }
-        var delta = elevation2 - elevation1;
+        const delta = elevation2 - elevation1;
         if (delta == 1 || delta == -1) {
             return HexEdgeType.Slope;
         }
         return HexEdgeType.Cliff;
-    };
-    HexMetrics.outerRadius = 10.0;
-    HexMetrics.innerRadius = HexMetrics.outerRadius * 0.866025404;
-    HexMetrics.solidFactor = 0.75;
-    HexMetrics.blendFactor = 1.0 - HexMetrics.solidFactor;
-    HexMetrics.elevationStep = 5.0;
-    HexMetrics.terracesPerSlope = 2;
-    HexMetrics.terraceSteps = HexMetrics.terracesPerSlope * 2 + 1;
-    HexMetrics.horizontalTerraceStepSize = (1.0 / HexMetrics.terraceSteps);
-    HexMetrics.verticalTerraceStepSize = (1.0 / (HexMetrics.terracesPerSlope + 1));
-    HexMetrics.corners = [
-        new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
-        new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
-        new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),
-        new BABYLON.Vector3(0.0, 0.0, -HexMetrics.outerRadius),
-        new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),
-        new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
-        new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius)
-    ];
-    return HexMetrics;
-}());
+    }
+    static sampleNoise(position) {
+        return Texture.sample(HexMetrics.noiseTexture, position);
+    }
+}
+HexMetrics.outerRadius = 10.0;
+HexMetrics.innerRadius = HexMetrics.outerRadius * 0.866025404;
+HexMetrics.solidFactor = 0.8;
+HexMetrics.blendFactor = 1.0 - HexMetrics.solidFactor;
+HexMetrics.elevationStep = 3.0;
+HexMetrics.terracesPerSlope = 2;
+HexMetrics.terraceSteps = HexMetrics.terracesPerSlope * 2 + 1;
+HexMetrics.horizontalTerraceStepSize = (1.0 / HexMetrics.terraceSteps);
+HexMetrics.verticalTerraceStepSize = (1.0 / (HexMetrics.terracesPerSlope + 1));
+HexMetrics.noiseScale = 0.7;
+HexMetrics.cellPerturbStrength = 4.0;
+HexMetrics.elevationPerturbStrength = 1.5;
+HexMetrics.corners = [
+    new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
+    new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
+    new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),
+    new BABYLON.Vector3(0.0, 0.0, -HexMetrics.outerRadius),
+    new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, -0.5 * HexMetrics.outerRadius),
+    new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
+    new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius)
+];
+class Texture {
+    constructor(data, width, height) {
+        this.data = data;
+        this.width = width;
+        this.height = height;
+    }
+    static sample(texture, position) {
+        const x = Math.abs(Math.floor(position.x * HexMetrics.noiseScale)), z = Math.abs(Math.floor(position.z * HexMetrics.noiseScale)), startOffset = 4 * (z * texture.width + x);
+        return new BABYLON.Vector4(texture.data[startOffset], texture.data[startOffset + 1], texture.data[startOffset + 2], texture.data[startOffset + 3]);
+    }
+    // http://strauss.pas.nu/js-bilinear-interpolation.html
+    static ivect(ix, iy, w) {
+        // byte array, r,g,b,a
+        return ((ix + w * iy) * 4);
+    }
+    static bilinearFiltered(srcImg, destImg, scale) {
+        // c.f.: wikipedia english article on bilinear interpolation
+        // taking the unit square, the inner loop looks like this
+        // note: there's a function call inside the double loop to this one
+        // maybe a performance killer, optimize this whole code as you need
+        function inner(f00, f10, f01, f11, x, y) {
+            var un_x = 1.0 - x;
+            var un_y = 1.0 - y;
+            return (f00 * un_x * un_y + f10 * x * un_y + f01 * un_x * y + f11 * x * y);
+        }
+        var i, j;
+        var iyv, iy0, iy1, ixv, ix0, ix1;
+        var idxD, idxS00, idxS10, idxS01, idxS11;
+        var dx, dy;
+        var r, g, b, a;
+        for (i = 0; i < destImg.height; ++i) {
+            iyv = i / scale;
+            iy0 = Math.floor(iyv);
+            // Math.ceil can go over bounds
+            iy1 = (Math.ceil(iyv) > (srcImg.height - 1) ? (srcImg.height - 1) : Math.ceil(iyv));
+            for (j = 0; j < destImg.width; ++j) {
+                ixv = j / scale;
+                ix0 = Math.floor(ixv);
+                // Math.ceil can go over bounds
+                ix1 = (Math.ceil(ixv) > (srcImg.width - 1) ? (srcImg.width - 1) : Math.ceil(ixv));
+                idxD = Texture.ivect(j, i, destImg.width);
+                // matrix to vector indices
+                idxS00 = Texture.ivect(ix0, iy0, srcImg.width);
+                idxS10 = Texture.ivect(ix1, iy0, srcImg.width);
+                idxS01 = Texture.ivect(ix0, iy1, srcImg.width);
+                idxS11 = Texture.ivect(ix1, iy1, srcImg.width);
+                // overall coordinates to unit square
+                dx = ixv - ix0;
+                dy = iyv - iy0;
+                // I let the r, g, b, a on purpose for debugging
+                r = inner(srcImg.data[idxS00], srcImg.data[idxS10], srcImg.data[idxS01], srcImg.data[idxS11], dx, dy);
+                destImg.data[idxD] = r;
+                g = inner(srcImg.data[idxS00 + 1], srcImg.data[idxS10 + 1], srcImg.data[idxS01 + 1], srcImg.data[idxS11 + 1], dx, dy);
+                destImg.data[idxD + 1] = g;
+                b = inner(srcImg.data[idxS00 + 2], srcImg.data[idxS10 + 2], srcImg.data[idxS01 + 2], srcImg.data[idxS11 + 2], dx, dy);
+                destImg.data[idxD + 2] = b;
+                a = inner(srcImg.data[idxS00 + 3], srcImg.data[idxS10 + 3], srcImg.data[idxS01 + 3], srcImg.data[idxS11 + 3], dx, dy);
+                destImg.data[idxD + 3] = a;
+            }
+        }
+    }
+}
 var HexDirection;
 (function (HexDirection) {
     HexDirection[HexDirection["NE"] = 0] = "NE";
@@ -100,28 +152,24 @@ var HexEdgeType;
     HexEdgeType[HexEdgeType["Slope"] = 1] = "Slope";
     HexEdgeType[HexEdgeType["Cliff"] = 2] = "Cliff";
 })(HexEdgeType || (HexEdgeType = {}));
-var HexCooridnates = /** @class */ (function () {
-    function HexCooridnates(x, z) {
+class HexCooridnates {
+    constructor(x, z) {
         this.x = x;
         this.z = z;
     }
-    Object.defineProperty(HexCooridnates.prototype, "y", {
-        get: function () {
-            return -this.x - this.z;
-        },
-        enumerable: true,
-        configurable: true
-    });
-    HexCooridnates.fromOffsetCoordinates = function (x, z) {
+    get y() {
+        return -this.x - this.z;
+    }
+    static fromOffsetCoordinates(x, z) {
         return new HexCooridnates(x - Math.floor(z / 2.0), z);
-    };
-    HexCooridnates.fromPosition = function (position) {
-        var x = position.x / (HexMetrics.innerRadius * 2.0), y = -x, offset = position.z / (HexMetrics.outerRadius * 3.0);
+    }
+    static fromPosition(position) {
+        let x = position.x / (HexMetrics.innerRadius * 2.0), y = -x, offset = position.z / (HexMetrics.outerRadius * 3.0);
         x -= offset;
         y -= offset;
-        var ix = Math.round(x), iy = Math.round(y), iz = Math.round(-x - y);
+        let ix = Math.round(x), iy = Math.round(y), iz = Math.round(-x - y);
         if (ix + iy + iz != 0) {
-            var dx = Math.abs(x - ix), dy = Math.abs(y - iy), dz = Math.abs(-x - y - iz);
+            let dx = Math.abs(x - ix), dy = Math.abs(y - iy), dz = Math.abs(-x - y - iz);
             if (dx > dy && dx > dz) {
                 ix = -iy - iz;
             }
@@ -130,140 +178,147 @@ var HexCooridnates = /** @class */ (function () {
             }
         }
         return new HexCooridnates(ix, iz);
-    };
-    HexCooridnates.prototype.toString = function () {
-        return "(" + this.x + ", " + this.y + ", " + this.z + ")";
-    };
-    return HexCooridnates;
-}());
-var HexCellColor = /** @class */ (function () {
-    function HexCellColor() {
     }
-    HexCellColor.default = function () {
+    toString() {
+        return `(${this.x}, ${this.y}, ${this.z})`;
+    }
+}
+class HexCellColor {
+    static default() {
         return HexCellColor.PASTEL_BLUE;
-    };
-    HexCellColor.random = function () {
+    }
+    static random() {
         return HexCellColor.colors[Math.floor(Math.random() * HexCellColor.colors.length)];
-    };
-    HexCellColor.average = function (colors) {
-        var avgColor = new BABYLON.Color4(0, 0, 0, 0);
-        for (var i = 0; i < colors.length; i++) {
+    }
+    static average(colors) {
+        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
+        for (let i = 0; i < colors.length; i++) {
             avgColor.addInPlace(colors[i]);
         }
         avgColor.r = avgColor.r / colors.length;
         avgColor.g = avgColor.g / colors.length;
         avgColor.b = avgColor.b / colors.length;
         return avgColor;
-    };
-    HexCellColor.PASTEL_BLUE = BABYLON.Color4.FromHexString("#548af8ff");
-    HexCellColor.PASTEL_YELLOW = BABYLON.Color4.FromHexString("#fffc1fff");
-    HexCellColor.PASTEL_GREEN = BABYLON.Color4.FromHexString("#20e43fff");
-    HexCellColor.colors = [
-        BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_YELLOW,
-        BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_BLUE,
-        BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_GREEN //hex green, with alpha
-    ];
-    return HexCellColor;
-}());
+    }
+}
+HexCellColor.PASTEL_BLUE = BABYLON.Color4.FromHexString("#548af8ff");
+HexCellColor.PASTEL_YELLOW = BABYLON.Color4.FromHexString("#fffc1fff");
+HexCellColor.PASTEL_GREEN = BABYLON.Color4.FromHexString("#20e43fff");
+HexCellColor.colors = [
+    BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
+    HexCellColor.PASTEL_YELLOW,
+    BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
+    HexCellColor.PASTEL_BLUE,
+    BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
+    HexCellColor.PASTEL_GREEN //hex green, with alpha
+];
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!!
  */
-var HexCell = /** @class */ (function (_super) {
-    __extends(HexCell, _super);
-    function HexCell(name, scene) {
-        var _this = _super.call(this, name, scene) || this;
-        _this.neighbors = new Array(6);
-        _this._elevation = 0;
-        var options = {
+class HexCell extends BABYLON.Mesh {
+    constructor(name, scene) {
+        super(name, scene);
+        this.neighbors = new Array(6);
+        this._elevation = 0;
+        let options = {
             size: 10,
             width: 10,
             height: 10,
             updatable: true
         };
-        var vertexData = BABYLON.VertexData.CreateGround(options);
-        vertexData.applyToMesh(_this);
-        return _this;
+        let vertexData = BABYLON.VertexData.CreateGround(options);
+        vertexData.applyToMesh(this);
     }
-    HexCell.prototype.getNeighbor = function (direction) {
+    getNeighbor(direction) {
         return this.neighbors[direction];
-    };
-    HexCell.prototype.setNeighbor = function (direction, cell) {
+    }
+    setNeighbor(direction, cell) {
         this.neighbors[direction] = cell;
         cell.neighbors[HexDirection.opposite(direction)] = this;
-    };
-    Object.defineProperty(HexCell.prototype, "elevation", {
-        get: function () {
-            return this._elevation;
-        },
-        set: function (elevation) {
-            this._elevation = elevation;
-            this._cellPosition.y = elevation * HexMetrics.elevationStep;
-            this.refreshPosition();
-        },
-        enumerable: true,
-        configurable: true
-    });
-    Object.defineProperty(HexCell.prototype, "cellPosition", {
-        get: function () {
-            return this._cellPosition;
-        },
-        set: function (position) {
-            this._cellPosition = position.clone();
-            this.refreshPosition();
-        },
-        enumerable: true,
-        configurable: true
-    });
+    }
+    get elevation() {
+        return this._elevation;
+    }
+    set elevation(elevation) {
+        this._elevation = elevation;
+        this._cellPosition.y = elevation * HexMetrics.elevationStep;
+        this._cellPosition.y +=
+            (HexMetrics.sampleNoise(this._cellPosition).y * 2.0 - 1.0) * HexMetrics.elevationPerturbStrength;
+        this.refreshPosition();
+    }
+    get cellPosition() {
+        return this._cellPosition;
+    }
+    set cellPosition(position) {
+        this._cellPosition = position.clone();
+        this.refreshPosition();
+    }
     // Sets mesh render position from cellPosition (renders it slightly above).
-    HexCell.prototype.refreshPosition = function () {
+    refreshPosition() {
         this.position = this._cellPosition.clone();
         this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
-    };
-    HexCell.prototype.getEdgeType = function (direction) {
-        return HexMetrics.getEdgeType(this.elevation, this.neighbors[direction].elevation);
-    };
-    HexCell.prototype.getEdgeTypeForCell = function (cell) {
-        return HexMetrics.getEdgeType(this.elevation, cell.elevation);
-    };
-    HexCell.CELL_OVERLAY_ELEVATION = 0.1;
-    return HexCell;
-}(BABYLON.Mesh));
-var HexMesh = /** @class */ (function (_super) {
-    __extends(HexMesh, _super);
-    function HexMesh(name, scene) {
-        var _this = _super.call(this, name, scene) || this;
-        _this._vertices = [];
-        _this._triangles = [];
-        _this._colors = [];
-        _this.material = HexMesh.getDefaultMaterial(scene);
-        _this._setReady(false);
-        return _this;
     }
-    HexMesh.getDefaultMaterial = function (scene) {
+    getEdgeType(direction) {
+        return HexMetrics.getEdgeType(this.elevation, this.neighbors[direction].elevation);
+    }
+    getEdgeTypeForCell(cell) {
+        return HexMetrics.getEdgeType(this.elevation, cell.elevation);
+    }
+}
+HexCell.CELL_OVERLAY_ELEVATION = 0.1;
+class EdgeVertices {
+    static fromCorners(corner1, corner2) {
+        let result = new EdgeVertices();
+        result.v1 = corner1;
+        result.v2 = BABYLON.Vector3.Lerp(corner1, corner2, 1.0 / 3.0);
+        result.v3 = BABYLON.Vector3.Lerp(corner1, corner2, 2.0 / 3.0);
+        result.v4 = corner2;
+        return result;
+    }
+    static terraceLerp(a, b, step) {
+        let result = new EdgeVertices();
+        result.v1 = HexMetrics.terraceLerp(a.v1, b.v1, step);
+        result.v2 = HexMetrics.terraceLerp(a.v2, b.v2, step);
+        result.v3 = HexMetrics.terraceLerp(a.v3, b.v3, step);
+        result.v4 = HexMetrics.terraceLerp(a.v4, b.v4, step);
+        return result;
+    }
+}
+class HexMesh extends BABYLON.Mesh {
+    constructor(name, scene) {
+        super(name, scene);
+        this._vertices = [];
+        this._triangles = [];
+        this._colors = [];
+        this.material = HexMesh.getDefaultMaterial(scene);
+        this._setReady(false);
+    }
+    static getDefaultMaterial(scene) {
         if (HexMesh._material === null) {
-            var mat = new BABYLON.StandardMaterial("material", scene);
+            let mat = new BABYLON.StandardMaterial("material", scene);
             mat.backFaceCulling = false;
-            mat.emissiveColor = BABYLON.Color3.FromHexString("#E6E6E6");
+            mat.emissiveColor = BABYLON.Color3.Black(); //BABYLON.Color3.FromHexString("#E6E6E6");
             mat.diffuseColor = BABYLON.Color3.White();
             // mat.specularColor = BABYLON.Color3.Black();
             // mat.wireframe = true;
             HexMesh._material = mat;
         }
         return HexMesh._material;
-    };
-    HexMesh.prototype.triangulate = function (cells) {
+    }
+    perturb(position) {
+        let sample = HexMetrics.sampleNoise(position);
+        return new BABYLON.Vector3(position.x + (sample.x * 2.0 - 1.0) * HexMetrics.cellPerturbStrength, position.y, position.z + (sample.z * 2.0 - 1.0) * HexMetrics.cellPerturbStrength);
+    }
+    triangulate(cells) {
         this._vertices = [];
         this._triangles = [];
         this._colors = [];
-        for (var i = 0; i < cells.length; i++) {
-            for (var direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
+        for (let i = 0; i < cells.length; i++) {
+            for (let direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
                 this.triangulateCell(direction, cells[i]);
             }
         }
-        var vertexData = new BABYLON.VertexData(), normals = [];
+        let vertexData = new BABYLON.VertexData(), normals = [];
         BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals);
         vertexData.positions = this._vertices;
         vertexData.indices = this._triangles;
@@ -271,51 +326,66 @@ var HexMesh = /** @class */ (function (_super) {
         vertexData.normals = normals;
         vertexData.applyToMesh(this, true);
         this._setReady(true);
-    };
-    HexMesh.prototype.triangulateCell = function (direction, cell) {
-        var center = cell.cellPosition.clone(), v1 = center.add(HexMetrics.getFirstSolidCorner(direction)), v2 = center.add(HexMetrics.getSecondSolidCorner(direction));
-        this.addTriangle(center, v1, v2);
-        this.addSingleTriangleColor(cell.color);
+    }
+    triangulateEdgeFan(center, edge, color) {
+        this.addTriangle(center, edge.v1, edge.v2);
+        this.addSingleTriangleColor(color);
+        this.addTriangle(center, edge.v2, edge.v3);
+        this.addSingleTriangleColor(color);
+        this.addTriangle(center, edge.v3, edge.v4);
+        this.addSingleTriangleColor(color);
+    }
+    triangulateEdgeStrip(e1, c1, e2, c2) {
+        this.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
+        this.addQuadColor2(c1, c2);
+        this.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
+        this.addQuadColor2(c1, c2);
+        this.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
+        this.addQuadColor2(c1, c2);
+    }
+    triangulateCell(direction, cell) {
+        let center = cell.cellPosition.clone(), e = EdgeVertices.fromCorners(center.add(HexMetrics.getFirstSolidCorner(direction)), center.add(HexMetrics.getSecondSolidCorner(direction)));
+        this.triangulateEdgeFan(center, e, cell.color);
         if (direction <= HexDirection.SE) {
-            this.triangulateCellConnection(direction, cell, v1, v2);
+            this.triangulateCellConnection(direction, cell, e);
         }
-    };
-    HexMesh.prototype.triangulateCellConnection = function (direction, cell, v1, v2) {
-        var neighbor = cell.getNeighbor(direction);
+    }
+    triangulateCellConnection(direction, cell, e1) {
+        let neighbor = cell.getNeighbor(direction);
         if (neighbor == null) {
             return;
         }
-        var bridge = HexMetrics.getBridge(direction), v3 = v1.add(bridge), v4 = v2.add(bridge);
-        v3.y = v4.y = neighbor.elevation * HexMetrics.elevationStep;
+        let bridge = HexMetrics.getBridge(direction);
+        bridge.y = neighbor.cellPosition.y - cell.cellPosition.y;
+        let e2 = EdgeVertices.fromCorners(e1.v1.add(bridge), e1.v4.add(bridge));
         if (cell.getEdgeType(direction) === HexEdgeType.Slope) {
-            this.triangulateCellEdgeTerraces(v1, v2, cell, v3, v4, neighbor);
+            this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor);
         }
         else {
-            this.addQuad(v1, v2, v3, v4);
-            this.addQuadColor2(cell.color, neighbor.color);
+            this.triangulateEdgeStrip(e1, cell.color, e2, neighbor.color);
         }
-        var nextNeighborDirection = HexDirection.next(direction), nextNeighbor = cell.getNeighbor(nextNeighborDirection);
+        let nextNeighborDirection = HexDirection.next(direction), nextNeighbor = cell.getNeighbor(nextNeighborDirection);
         if (direction <= HexDirection.E && nextNeighbor != null) {
-            var v5 = v2.add(HexMetrics.getBridge(nextNeighborDirection));
-            v5.y = nextNeighbor.elevation * HexMetrics.elevationStep;
+            let v5 = e1.v4.add(HexMetrics.getBridge(nextNeighborDirection));
+            v5.y = nextNeighbor.cellPosition.y;
             if (cell.elevation <= neighbor.elevation) {
                 if (cell.elevation <= nextNeighbor.elevation) {
-                    this.triangulateCellCorner(v2, cell, v4, neighbor, v5, nextNeighbor);
+                    this.triangulateCellCorner(e1.v4, cell, e2.v4, neighbor, v5, nextNeighbor);
                 }
                 else {
-                    this.triangulateCellCorner(v5, nextNeighbor, v2, cell, v4, neighbor);
+                    this.triangulateCellCorner(v5, nextNeighbor, e1.v4, cell, e2.v4, neighbor);
                 }
             }
             else if (neighbor.elevation <= nextNeighbor.elevation) {
-                this.triangulateCellCorner(v4, neighbor, v5, nextNeighbor, v2, cell);
+                this.triangulateCellCorner(e2.v4, neighbor, v5, nextNeighbor, e1.v4, cell);
             }
             else {
-                this.triangulateCellCorner(v5, nextNeighbor, v2, cell, v4, neighbor);
+                this.triangulateCellCorner(v5, nextNeighbor, e1.v4, cell, e2.v4, neighbor);
             }
         }
-    };
-    HexMesh.prototype.triangulateCellCorner = function (bottom, bottomCell, left, leftCell, right, rightCell) {
-        var leftEdgeType = bottomCell.getEdgeTypeForCell(leftCell), rightEdgeType = bottomCell.getEdgeTypeForCell(rightCell);
+    }
+    triangulateCellCorner(bottom, bottomCell, left, leftCell, right, rightCell) {
+        let leftEdgeType = bottomCell.getEdgeTypeForCell(leftCell), rightEdgeType = bottomCell.getEdgeTypeForCell(rightCell);
         if (leftEdgeType === HexEdgeType.Slope) {
             if (rightEdgeType === HexEdgeType.Slope) {
                 this.triangulateCellCornerTerraces(bottom, bottomCell, left, leftCell, right, rightCell);
@@ -347,12 +417,12 @@ var HexMesh = /** @class */ (function (_super) {
             this.addTriangle(bottom, left, right);
             this.addTriangleColor(bottomCell.color, leftCell.color, rightCell.color);
         }
-    };
-    HexMesh.prototype.triangulateCellCornerTerraces = function (begin, beginCell, left, leftCell, right, rightCell) {
-        var v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), c3 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1), c4 = HexMetrics.terraceColorLerp(beginCell.color, rightCell.color, 1);
+    }
+    triangulateCellCornerTerraces(begin, beginCell, left, leftCell, right, rightCell) {
+        let v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), c3 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1), c4 = HexMetrics.terraceColorLerp(beginCell.color, rightCell.color, 1);
         this.addTriangle(begin, v3, v4);
         this.addTriangleColor(beginCell.color, c3, c4);
-        var i, v1, v2, c1, c2;
+        let i, v1, v2, c1, c2;
         for (i = 2; i < HexMetrics.terraceSteps; i++) {
             v1 = v3;
             v2 = v4;
@@ -367,167 +437,188 @@ var HexMesh = /** @class */ (function (_super) {
         }
         this.addQuad(v3, v4, left, right);
         this.addQuadColor(c3, c4, leftCell.color, rightCell.color);
-    };
-    HexMesh.prototype.triangulateCellCornerTerracesCliff = function (begin, beginCell, left, leftCell, right, rightCell) {
-        var b = Math.abs(1.0 / (rightCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(begin, right, b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, rightCell.color, b);
+    }
+    triangulateCellCornerTerracesCliff(begin, beginCell, left, leftCell, right, rightCell) {
+        let b = Math.abs(1.0 / (rightCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(this.perturb(begin), this.perturb(right), b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, rightCell.color, b);
         this.trinagulateCellBoundryTriangle(begin, beginCell, left, leftCell, boundry, boundryColor);
         if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
             this.trinagulateCellBoundryTriangle(left, leftCell, right, rightCell, boundry, boundryColor);
         }
         else {
-            this.addTriangle(left, right, boundry);
+            this.addTriangleUnperturbed(this.perturb(left), this.perturb(right), boundry);
             this.addTriangleColor(leftCell.color, rightCell.color, boundryColor);
         }
-    };
-    HexMesh.prototype.triangulateCellCornerCliffTerraces = function (begin, beginCell, left, leftCell, right, rightCell) {
-        var b = Math.abs(1.0 / (leftCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(begin, left, b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, leftCell.color, b);
+    }
+    triangulateCellCornerCliffTerraces(begin, beginCell, left, leftCell, right, rightCell) {
+        let b = Math.abs(1.0 / (leftCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(this.perturb(begin), this.perturb(left), b), boundryColor = BABYLON.Color4.Lerp(beginCell.color, leftCell.color, b);
         this.trinagulateCellBoundryTriangle(right, rightCell, begin, beginCell, boundry, boundryColor);
         if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
             this.trinagulateCellBoundryTriangle(left, leftCell, right, rightCell, boundry, boundryColor);
         }
         else {
-            this.addTriangle(left, right, boundry);
+            this.addTriangleUnperturbed(this.perturb(left), this.perturb(right), boundry);
             this.addTriangleColor(leftCell.color, rightCell.color, boundryColor);
         }
-    };
-    HexMesh.prototype.trinagulateCellBoundryTriangle = function (begin, beginCell, left, leftCell, boundry, boundryColor) {
-        var v2 = HexMetrics.terraceLerp(begin, left, 1), c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1);
-        this.addTriangle(begin, v2, boundry);
+    }
+    trinagulateCellBoundryTriangle(begin, beginCell, left, leftCell, boundry, boundryColor) {
+        let v2 = this.perturb(HexMetrics.terraceLerp(begin, left, 1)), c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1);
+        this.addTriangleUnperturbed(this.perturb(begin), v2, boundry);
         this.addTriangleColor(beginCell.color, c2, boundryColor);
-        var i, v1, c1;
+        let i, v1, c1;
         for (i = 2; i < HexMetrics.terraceSteps; i++) {
             v1 = v2;
             c1 = c2;
-            v2 = HexMetrics.terraceLerp(begin, left, i);
+            v2 = this.perturb(HexMetrics.terraceLerp(begin, left, i));
             c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, i);
-            this.addTriangle(v1, v2, boundry);
+            this.addTriangleUnperturbed(v1, v2, boundry);
             this.addTriangleColor(c1, c2, boundryColor);
         }
-        this.addTriangle(v2, left, boundry);
+        this.addTriangleUnperturbed(v2, this.perturb(left), boundry);
         this.addTriangleColor(c2, leftCell.color, boundryColor);
-    };
-    HexMesh.prototype.triangulateCellEdgeTerraces = function (beginLeft, beginRight, beginCell, endLeft, endRight, endCell) {
-        var v3 = HexMetrics.terraceLerp(beginLeft, endLeft, 1), v4 = HexMetrics.terraceLerp(beginRight, endRight, 1), c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, 1);
-        this.addQuad(beginLeft, beginRight, v3, v4);
-        this.addQuadColor2(beginCell.color, c2);
-        var v1, v2, c1;
-        for (var i = 2; i < HexMetrics.terraceSteps; i++) {
-            v1 = v3;
-            v2 = v4;
+    }
+    triangulateCellEdgeTerraces(begin, beginCell, end, endCell) {
+        let e2 = EdgeVertices.terraceLerp(begin, end, 1), c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, 1);
+        this.triangulateEdgeStrip(begin, beginCell.color, e2, c2);
+        let e1, c1;
+        for (let i = 2; i < HexMetrics.terraceSteps; i++) {
+            e1 = e2;
             c1 = c2;
-            v3 = HexMetrics.terraceLerp(beginLeft, endLeft, i);
-            v4 = HexMetrics.terraceLerp(beginRight, endRight, i);
+            e2 = EdgeVertices.terraceLerp(begin, end, i);
             c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, i);
-            this.addQuad(v1, v2, v3, v4);
-            this.addQuadColor2(c1, c2);
+            this.triangulateEdgeStrip(e1, c1, e2, c2);
         }
-        this.addQuad(v3, v4, endLeft, endRight);
-        this.addQuadColor2(c2, endCell.color);
-    };
-    HexMesh.prototype.addTriangle = function (v1, v2, v3) {
-        var vertexIndex = this._vertices.length / 3;
+        this.triangulateEdgeStrip(e2, c2, end, endCell.color);
+    }
+    addTriangle(v1, v2, v3) {
+        const vertexIndex = this._vertices.length / 3;
+        this.addVertex(this.perturb(v1));
+        this.addVertex(this.perturb(v2));
+        this.addVertex(this.perturb(v3));
+        this._triangles.push(vertexIndex);
+        this._triangles.push(vertexIndex + 1);
+        this._triangles.push(vertexIndex + 2);
+    }
+    addTriangleUnperturbed(v1, v2, v3) {
+        let vertexIndex = this._vertices.length / 3;
         this.addVertex(v1);
         this.addVertex(v2);
         this.addVertex(v3);
         this._triangles.push(vertexIndex);
         this._triangles.push(vertexIndex + 1);
         this._triangles.push(vertexIndex + 2);
-    };
-    HexMesh.prototype.addSingleTriangleColor = function (color) {
+    }
+    addSingleTriangleColor(color) {
         this.addColor(color);
         this.addColor(color);
         this.addColor(color);
-    };
-    HexMesh.prototype.addTriangleColor = function (color1, color2, color3) {
+    }
+    addTriangleColor(color1, color2, color3) {
         this.addColor(color1);
         this.addColor(color2);
         this.addColor(color3);
-    };
-    HexMesh.prototype.addQuad = function (v1, v2, v3, v4) {
-        var vertexIndex = this._vertices.length / 3;
-        this.addVertex(v1);
-        this.addVertex(v2);
-        this.addVertex(v3);
-        this.addVertex(v4);
+    }
+    addQuad(v1, v2, v3, v4) {
+        const vertexIndex = this._vertices.length / 3;
+        this.addVertex(this.perturb(v1));
+        this.addVertex(this.perturb(v2));
+        this.addVertex(this.perturb(v3));
+        this.addVertex(this.perturb(v4));
         this._triangles.push(vertexIndex);
         this._triangles.push(vertexIndex + 2);
         this._triangles.push(vertexIndex + 1);
         this._triangles.push(vertexIndex + 1);
         this._triangles.push(vertexIndex + 2);
         this._triangles.push(vertexIndex + 3);
-    };
-    HexMesh.prototype.addQuadColor = function (color1, color2, color3, color4) {
+    }
+    addQuadColor(color1, color2, color3, color4) {
         this.addColor(color1);
         this.addColor(color2);
         this.addColor(color3);
         this.addColor(color4);
-    };
+    }
     /** Adds only two colors to the quad. */
-    HexMesh.prototype.addQuadColor2 = function (color1, color2) {
+    addQuadColor2(color1, color2) {
         this.addColor(color1);
         this.addColor(color1);
         this.addColor(color2);
         this.addColor(color2);
-    };
-    HexMesh.prototype.addVertex = function (vertex) {
+    }
+    addVertex(vertex) {
         this._vertices.push(vertex.x);
         this._vertices.push(vertex.y);
         this._vertices.push(vertex.z);
-    };
-    HexMesh.prototype.addColor = function (color) {
+    }
+    addColor(color) {
         this._colors.push(color.r);
         this._colors.push(color.g);
         this._colors.push(color.b);
         this._colors.push(color.a);
-    };
-    HexMesh._material = null;
-    return HexMesh;
-}(BABYLON.Mesh));
-var HexGrid = /** @class */ (function () {
-    function HexGrid(scene) {
+    }
+}
+HexMesh._material = null;
+class HexGrid {
+    constructor(scene) {
         this.width = 6;
         this.height = 6;
         this.defaultColor = HexCellColor.PASTEL_BLUE;
         this._scene = scene;
     }
-    HexGrid.prototype.generate = function () {
-        this.cells = new Array(this.width * this.height);
-        var i = 0;
-        for (var z = 0; z < this.height; z++) {
-            for (var x = 0; x < this.width; x++) {
-                this.cells[i] = this.makeCell(x, z, i);
-                i++;
+    generate() {
+        let texture = new BABYLON.Texture('./assets/gfx/material/noise.png', this._scene, false, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, null, null, null, null, BABYLON.Engine.TEXTUREFORMAT_RGBA);
+        window.txtr = texture;
+        let convert = (incomingData) => {
+            var i, l = incomingData.length;
+            var outputData = new Float32Array(incomingData.length);
+            for (i = 0; i < l; i++) {
+                outputData[i] = incomingData[i] / 256.0;
             }
-        }
-        this._hexMesh = new HexMesh("hex_mesh", this._scene);
-        this.refresh();
-        this._hexMesh.isVisible = true;
-    };
-    HexGrid.prototype.refresh = function () {
+            return outputData;
+        };
+        texture.onLoadObservable.addOnce((event, estate) => {
+            let noiseTexture, bilinearTexture;
+            noiseTexture = new Texture(convert(texture.readPixels()), texture.getSize().width, texture.getSize().height);
+            bilinearTexture = new Texture(Float32Array.from(noiseTexture.data), noiseTexture.width, noiseTexture.height);
+            Texture.bilinearFiltered(noiseTexture, bilinearTexture, 1.0);
+            HexMetrics.noiseTexture = bilinearTexture;
+            this.cells = new Array(this.width * this.height);
+            let i = 0;
+            for (let z = 0; z < this.height; z++) {
+                for (let x = 0; x < this.width; x++) {
+                    this.cells[i] = this.makeCell(x, z, i);
+                    i++;
+                }
+            }
+            this._hexMesh = new HexMesh("hex_mesh", this._scene);
+            this.refresh();
+            this._hexMesh.isVisible = true;
+        });
+    }
+    refresh() {
         this._hexMesh.triangulate(this.cells);
-    };
-    HexGrid.prototype.getCell = function (position) {
-        var coordinates = HexCooridnates.fromPosition(position), index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z / 2.0);
+    }
+    getCell(position) {
+        let coordinates = HexCooridnates.fromPosition(position), index = coordinates.x + coordinates.z * this.width + Math.floor(coordinates.z / 2.0);
         return this.cells[index];
-    };
-    HexGrid.prototype.makeCell = function (x, z, i) {
-        var cell = new HexCell("hex_cell_" + x + "_" + z, this._scene), cellPosition = new BABYLON.Vector3((x + z * 0.5 - Math.floor(z / 2)) * (HexMetrics.innerRadius * 2.0), 0.0, z * (HexMetrics.outerRadius * 1.5));
+    }
+    makeCell(x, z, i) {
+        let cell = new HexCell(`hex_cell_${x}_${z}`, this._scene), cellPosition = new BABYLON.Vector3((x + z * 0.5 - Math.floor(z / 2)) * (HexMetrics.innerRadius * 2.0), 0.0, z * (HexMetrics.outerRadius * 1.5));
         cell.coordinates = HexCooridnates.fromOffsetCoordinates(x, z);
         cell.isVisible = true;
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
-        var material = new BABYLON.StandardMaterial("" + x + z + "-material", this._scene), textTexture = this.makeCellText(cell.coordinates.toString());
+        let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene), textTexture = this.makeCellText(cell.coordinates.toString());
         material.diffuseTexture = textTexture;
         material.opacityTexture = textTexture;
         material.specularColor = BABYLON.Color3.Black();
         cell.material = material;
         if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
-            var cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
+            let cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
             cell.color = cfg.color;
             cell.elevation = cfg.elevation;
         }
         else {
             cell.color = HexCellColor.default();
+            cell.elevation = 0;
         }
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i - 1]);
@@ -547,59 +638,58 @@ var HexGrid = /** @class */ (function () {
             }
         }
         return cell;
-    };
-    HexGrid.prototype.makeCellText = function (txt) {
-        var size = 64;
-        var DTw = 10 * 60;
-        var DTh = 10 * 60;
-        var textTexture = new BABYLON.DynamicTexture("DT", { width: DTw, height: DTh }, this._scene, false);
+    }
+    makeCellText(txt) {
+        let size = 64;
+        let DTw = 10 * 60;
+        let DTh = 10 * 60;
+        let textTexture = new BABYLON.DynamicTexture("DT", { width: DTw, height: DTh }, this._scene, false);
         textTexture.hasAlpha = true;
-        var textCtx = textTexture.getContext();
-        textCtx.font = size + "px bold monospace";
+        let textCtx = textTexture.getContext();
+        textCtx.font = `${size}px bold monospace`;
         textCtx.fillStyle = "transparent";
-        var textWidth = textCtx.measureText(txt).width;
-        var ratio = textWidth / size;
-        var fontSize = Math.floor(DTw / ratio);
-        textTexture.drawText(txt, null, null, fontSize + "px bold monospace", "black", null);
+        let textWidth = textCtx.measureText(txt).width;
+        let ratio = textWidth / size;
+        let fontSize = Math.floor(DTw / ratio);
+        textTexture.drawText(txt, null, null, `${fontSize}px bold monospace`, "black", null);
         return textTexture;
-    };
-    HexGrid.defaultGridonfiguration = {
-        "(0, -1, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(2, -3, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(3, -4, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(-1, -1, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(3, -5, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(4, -6, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(-1, -2, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(0, -3, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(1, -4, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(2, -5, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
-        "(1, -2, 1)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
-        "(0, -2, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
-        "(1, -3, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
-        "(2, -4, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 }
-    };
-    return HexGrid;
-}());
-var HexMapEditor = /** @class */ (function () {
-    function HexMapEditor(grid) {
+    }
+}
+// public static defaultGridonfiguration = {};
+HexGrid.defaultGridonfiguration = {
+    "(0, -1, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(2, -3, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(3, -4, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(-1, -1, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(3, -5, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(4, -6, 2)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(-1, -2, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(0, -3, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(1, -4, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(2, -5, 3)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },
+    "(1, -2, 1)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
+    "(0, -2, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
+    "(1, -3, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 },
+    "(2, -4, 2)": { color: HexCellColor.PASTEL_GREEN, elevation: 2 }
+};
+class HexMapEditor {
+    constructor(grid) {
         this.activeElevation = 0.0;
         this.grid = grid;
         this.activeColor = HexCellColor.default();
     }
-    HexMapEditor.prototype.handleInput = function (position) {
+    handleInput(position) {
         this.editCell(this.grid.getCell(position));
-    };
-    HexMapEditor.prototype.editCell = function (cell) {
+    }
+    editCell(cell) {
         cell.color = this.activeColor;
         cell.elevation = this.activeElevation;
         this.grid.refresh();
-    };
-    HexMapEditor.prototype.setActiveColor = function (color) {
+    }
+    setActiveColor(color) {
         this.activeColor = color;
-    };
-    HexMapEditor.prototype.setElevation = function (elevation) {
+    }
+    setElevation(elevation) {
         this.activeElevation = elevation;
-    };
-    return HexMapEditor;
-}());
+    }
+}
