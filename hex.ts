@@ -1,4 +1,7 @@
 ///<reference path="babylon.d.ts" />
+///<reference path="babylon.gui.d.ts" />
+
+type Nullable<T> = T | null;
 
 class HexMetrics {
     public static outerRadius: number = 10.0;
@@ -192,7 +195,7 @@ enum HexEdgeType {
     Flat, Slope, Cliff
 }
 
-class HexCooridnates {
+class HexCoordinates {
     public x: number;
     public z: number;
     private _y: number;
@@ -206,11 +209,11 @@ class HexCooridnates {
         return -this.x - this.z;
     }
 
-    public static fromOffsetCoordinates(x: number, z: number): HexCooridnates {
-        return new HexCooridnates(x - Math.floor(z/2.0), z);
+    public static fromOffsetCoordinates(x: number, z: number): HexCoordinates {
+        return new HexCoordinates(x - Math.floor(z/2.0), z);
     }
 
-    public static fromPosition(position: BABYLON.Vector3): HexCooridnates {
+    public static fromPosition(position: BABYLON.Vector3): HexCoordinates {
         let x = position.x / (HexMetrics.innerRadius * 2.0),
             y = -x,
             offset = position.z / (HexMetrics.outerRadius * 3.0);
@@ -234,7 +237,7 @@ class HexCooridnates {
             }
         }
 
-        return new HexCooridnates(ix, iz);
+        return new HexCoordinates(ix, iz);
     }
 
     public toString() {
@@ -286,12 +289,17 @@ class HexCellColor {
 class HexCell extends BABYLON.Mesh {
     private static CELL_OVERLAY_ELEVATION = 0.1; 
 
-    public coordinates: HexCooridnates;
+    public coordinates: HexCoordinates;
     public neighbors: HexCell[] = new Array<HexCell>(6);
     public chunk: HexGridChunk;
-    private _elevation: number = Number.MIN_VALUE;
-    public _color: BABYLON.Color4;
+
     private _cellPosition: BABYLON.Vector3;
+    private _elevation: number = Number.MIN_VALUE;
+    private _color: BABYLON.Color4;
+    private _hasIncomingRiver: boolean;
+    private _hasOutgoingRiver: boolean;
+    private _incomingRiver: HexDirection;
+    private _outgoingRiver: HexDirection;
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -330,6 +338,13 @@ class HexCell extends BABYLON.Mesh {
         this._cellPosition.y += 
             (HexMetrics.sampleNoise(this._cellPosition).y * 2.0 - 1.0) * HexMetrics.elevationPerturbStrength;
 
+        if (this._hasOutgoingRiver && elevation < this.getNeighbor(this._outgoingRiver).elevation) {
+            this.removeOutgoigRiver();
+        }
+        if (this._hasIncomingRiver && elevation > this.getNeighbor(this._incomingRiver).elevation) {
+            this.removeIncomingRiver();
+        }
+
         this.refreshPosition();
         this.refresh();
     }
@@ -354,6 +369,94 @@ class HexCell extends BABYLON.Mesh {
 
         this._color = color;
         this.refresh();
+    }
+
+    get hasIncomingRiver(): boolean {
+        return this._hasIncomingRiver;
+    }
+
+    get hasOutgoingRiver(): boolean {
+        return this._hasOutgoingRiver;
+    }
+
+    get incomingRiver(): HexDirection {
+        return this._incomingRiver;
+    }
+
+    get outgoingRiver(): HexDirection {
+        return this._outgoingRiver;
+    }
+
+    get hasRiver(): boolean {
+        return this._hasIncomingRiver || this._hasOutgoingRiver;
+    }
+
+    get hasRiverBeginingOrEnd(): boolean {
+        return this._hasIncomingRiver != this._hasOutgoingRiver;
+    }
+
+    public hasRiverThroughEdge(direction: HexDirection): boolean {
+        return (
+            this._hasIncomingRiver && this._incomingRiver === direction ||
+            this._hasOutgoingRiver && this._outgoingRiver === direction
+        );
+    }
+
+    public setOutgoingRiver(direction: HexDirection): void {
+        if (this._hasOutgoingRiver && this._outgoingRiver === direction) {
+            return;
+        }
+
+        const neighbor = this.getNeighbor(direction);
+
+        if (!neighbor || this.elevation < neighbor.elevation) {
+            return;
+        }
+
+        this.removeOutgoigRiver();
+        if (this._hasIncomingRiver && this._incomingRiver === direction) {
+            this.removeIncomingRiver();
+        }
+
+        this._hasOutgoingRiver = true;
+        this._outgoingRiver = direction;
+        this.refreshSelfOnly();
+
+        neighbor.removeIncomingRiver();
+        neighbor._hasIncomingRiver = true;
+        neighbor._incomingRiver = HexDirection.opposite(direction);
+        neighbor.refreshSelfOnly();
+    }
+
+    public removeOutgoigRiver(): void {
+        if (!this._hasOutgoingRiver) {
+            return;
+        }
+
+        this._hasOutgoingRiver = false;
+        this.refreshSelfOnly();
+
+        const neighbor = this.getNeighbor(this._outgoingRiver);
+        neighbor._hasIncomingRiver = false;
+        neighbor.refreshSelfOnly();
+    }
+
+    public removeIncomingRiver(): void {
+        if (!this._hasIncomingRiver) {
+            return;
+        }
+
+        this._hasIncomingRiver = false;
+        this.refreshSelfOnly();
+
+        const neighbor = this.getNeighbor(this._incomingRiver);
+        neighbor._hasOutgoingRiver = false;
+        neighbor.refreshSelfOnly();
+    }
+
+    public removeRiver(): void {
+        this.removeOutgoigRiver();
+        this.removeIncomingRiver();
     }
 
     // Sets mesh render position from cellPosition (renders it slightly above).
@@ -384,6 +487,10 @@ class HexCell extends BABYLON.Mesh {
                 n.chunk.refresh();
             }
         }
+    }
+
+    public refreshSelfOnly(): void {
+        this.chunk.refresh();
     }
 }
 
@@ -830,7 +937,7 @@ class HexGridChunk {
     }
 
     refresh(): void {
-        HexGrid.CHUNKS_TO_REFRESH.set(this.hexMesh.name, this);  //[this.hexMesh.name] = this;
+        HexGrid.CHUNKS_TO_REFRESH.set(this.hexMesh.name, this);
     }
 
     doRefresh(): void {
@@ -961,10 +1068,22 @@ class HexGrid {
 
     getCell(position: BABYLON.Vector3): HexCell {
         let 
-            coordinates = HexCooridnates.fromPosition(position),
+            coordinates = HexCoordinates.fromPosition(position),
             index = coordinates.x + coordinates.z * this.cellCountX + Math.floor(coordinates.z/2.0);
 
         return this.cells[index];
+    }
+
+    getCellByHexCoordinates(coordinates: HexCoordinates): Nullable<HexCell> {
+        const
+            z = coordinates.z,
+            x = coordinates.x + ~~(z/2);
+
+        if (z < 0 || z >= this.cellCountZ || x < 0 || x >= this.cellCountX) {
+            return null;
+        }
+
+        return this.cells[x + z*this.cellCountX];
     }
 
     makeCell(x: number, z: number, i: number): HexCell {
@@ -976,7 +1095,7 @@ class HexGrid {
                 z * (HexMetrics.outerRadius * 1.5)
             );
 
-        cell.coordinates = HexCooridnates.fromOffsetCoordinates(x, z);
+        cell.coordinates = HexCoordinates.fromOffsetCoordinates(x, z);
         cell.isVisible = true;
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
@@ -1053,30 +1172,225 @@ class HexGrid {
     }
 }
 
+enum OptionalToggle {
+    Ignore, Yes, No
+}
+
 class HexMapEditor {
+    public static POINTER_BLOCKED_BY_GUI = false;
+
+    private static COLORS = [
+        {label: "--", color: null},
+        {label: "Blue", color: HexCellColor.PASTEL_BLUE},
+        {label: "Yellow", color: HexCellColor.PASTEL_YELLOW},
+        {label: "Green", color: HexCellColor.PASTEL_GREEN}
+    ];
+
     private grid: HexGrid;
-    private activeColor: BABYLON.Color4;
-    private activeElevation: number = 0.0;
+    private _scene: BABYLON.Scene;
+    private advancedTexture: BABYLON.GUI.AdvancedDynamicTexture;
+    // private scrollViewer: BABYLON.GUI.ScrollViewer;
+    private selectionPanel: BABYLON.GUI.SelectionPanel;
+    private activeColor?: BABYLON.Color4 = null;
+    private activeElevation?: number = 0.0;
+    private isElevationSelected: boolean = true;
+    private brushSize: number = 0;
+    private riverMode: OptionalToggle;
+
+    private isPointerDown: boolean = false;
+    private isDrag: boolean = false;
+    private dragDirection: HexDirection;
+    private previousCell: Nullable<HexCell>;
 
     constructor(grid: HexGrid) {
         this.grid = grid;
         this.activeColor = HexCellColor.default();
+
+        this.makeSelectionPanel();
     }
 
-    handleInput(position: BABYLON.Vector3) {
-        this.editCell(this.grid.getCell(position));
+    private makeSelectionPanel() {
+        this.advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+        // this.scrollViewer = new BABYLON.GUI.ScrollViewer();
+        this.selectionPanel = new BABYLON.GUI.SelectionPanel("ui_editor");
+
+        // this.advancedTexture.addControl(this.scrollViewer);
+
+        this.selectionPanel.width = 0.15;
+        this.selectionPanel.height = 0.6;
+        this.selectionPanel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+        this.selectionPanel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+        this.selectionPanel.background = "#336699";
+        this.selectionPanel.isPointerBlocker = true;
+
+        this.selectionPanel.onPointerClickObservable.add((eventData, eventState) => {
+            // NOTE: THIS STATIC VALUE IS RESET AT THE END OF RENDER LOOP (scene.registerAfterRender). FIX THIS.
+            HexMapEditor.POINTER_BLOCKED_BY_GUI = true;
+        });
+
+        this.advancedTexture.addControl(this.selectionPanel);
+
+        const
+            colorGroup = new BABYLON.GUI.RadioGroup("Color"),
+            elevationGroup = new BABYLON.GUI.CheckboxGroup("Elevation"),
+            riverGroup = new BABYLON.GUI.RadioGroup("River"),
+            slidersGroup = new BABYLON.GUI.SliderGroup("Values");
+
+        // Colors.
+        HexMapEditor.COLORS.forEach(colorOption => {
+            colorGroup.addRadio(colorOption.label, this.setActiveColor.bind(this));
+        });
+
+        // Elevation check.
+        elevationGroup.addCheckbox("Elevation", this.toggleElevation.bind(this), this.isElevationSelected);
+
+        // River
+        riverGroup.addRadio(OptionalToggle[OptionalToggle.Ignore], this.setRiverMode.bind(this), this.riverMode  === OptionalToggle.Ignore);
+        riverGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRiverMode.bind(this), this.riverMode  === OptionalToggle.Yes);
+        riverGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRiverMode.bind(this), this.riverMode  === OptionalToggle.No);
+
+        // Tool sliders.
+        slidersGroup.addSlider("Elevation", this.setElevation.bind(this), "unit", 0, 7, this.activeElevation, (v) => Math.floor(v));
+        slidersGroup.addSlider("Brush size", this.setBrushSize.bind(this), "cell", 0, 4, this.brushSize, (v) => ~~v);
+        
+        this.selectionPanel.addGroup(colorGroup);
+        this.selectionPanel.addGroup(riverGroup);
+        this.selectionPanel.addGroup(elevationGroup);
+        this.selectionPanel.addGroup(slidersGroup);
     }
 
-    editCell(cell: HexCell) {
-        cell.color = this.activeColor;
-        cell.elevation = this.activeElevation;
+    attachCameraControl(camera: BABYLON.FreeCamera): void {
+        this._scene = camera.getScene();
+
+        this._scene.onPointerObservable.add(this.onPointerDown.bind(this), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._scene.onPointerObservable.add(this.onPointerUp.bind(this), BABYLON.PointerEventTypes.POINTERUP);
+        this._scene.onPointerObservable.add(this.onPointerMove.bind(this), BABYLON.PointerEventTypes.POINTERMOVE);
     }
 
-    setActiveColor(color: BABYLON.Color4): void {
-        this.activeColor = color;
+    private handleInput(): boolean {
+        if (HexMapEditor.POINTER_BLOCKED_BY_GUI) {
+            this.previousCell = null;
+            return false;
+        }
+
+        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
+        
+        if (pickResult.hit && pickResult.pickedMesh instanceof HexMesh) {
+            let currentCell = this.grid.getCell(pickResult.pickedPoint);
+
+            if (this.previousCell && this.previousCell !== currentCell) {
+                this.validateDrag(currentCell);
+            } else {
+                this.isDrag = false;
+            }
+
+            this.editCells(currentCell);
+            this.previousCell = currentCell;
+        } else {
+            this.previousCell = null;
+        }
+
+        return true;
+    }
+
+    private onPointerDown(eventData: BABYLON.PointerInfo, eventState: BABYLON.EventState): void {
+        if (eventData.event.which !== 1) {
+            this.previousCell = null;
+            return;            
+        }
+
+        if (this.handleInput()) {
+            this.isPointerDown = true;
+        }
+    }
+
+    private onPointerUp(eventData: BABYLON.PointerInfo, eventState: BABYLON.EventState): void {
+        this.isPointerDown = false;
+    }
+
+    private onPointerMove(eventData: BABYLON.PointerInfo, eventState: BABYLON.EventState): void {
+        if (!this.isPointerDown) {
+            return;
+        }        
+
+        this.handleInput();
+    }
+
+    private validateDrag(currentCell: HexCell): void {
+        for (let dragDirection = HexDirection.NE; dragDirection <= HexDirection.NW; dragDirection++) {
+            if (this.previousCell.getNeighbor(dragDirection) == currentCell) {
+                this.isDrag = true;
+                this.dragDirection = dragDirection;
+                return;
+            }
+        }
+
+        this.isDrag = false;
+    }
+
+    editCell(cell: Nullable<HexCell>) {
+        if (!cell) {
+            return;
+        }
+
+        if (this.activeColor !== null) {
+            cell.color = this.activeColor;
+        }
+
+        if (this.isElevationSelected) {
+            cell.elevation = this.activeElevation;
+        }
+
+        if (this.riverMode === OptionalToggle.No) {
+            cell.removeRiver();
+        }
+        else if (this.isDrag && this.riverMode === OptionalToggle.Yes) {
+            let otherCell = cell.getNeighbor(HexDirection.opposite(this.dragDirection));
+            
+            if (otherCell) {
+                otherCell.setOutgoingRiver(this.dragDirection);
+            }
+        }
+    }
+
+    editCells(centerCell: HexCell) {
+        const
+            centerX = centerCell.coordinates.x,
+            centerZ = centerCell.coordinates.z;
+
+        for (let r = 0, z = centerZ - this.brushSize; z <= centerZ; z++, r++) {
+            for (let x = centerX - r; x <= centerX + this.brushSize; x++) {
+                this.editCell(this.grid.getCellByHexCoordinates(new HexCoordinates(x, z)));
+            }
+        }
+        for (let r = 0, z = centerZ + this.brushSize; z > centerZ; z--, r++) {
+            for (let x = centerX - this.brushSize; x <= centerX + r; x++) {
+                this.editCell(this.grid.getCellByHexCoordinates(new HexCoordinates(x, z)));
+            }
+        }
+    }
+
+    setActiveColor(color: number): void {
+        if (color === 0) {
+            this.activeColor = null;
+        } else {
+            this.activeColor = HexMapEditor.COLORS[color].color;
+        }
     }
 
     setElevation(elevation: number): void {
-        this.activeElevation = elevation;
+        this.activeElevation = Math.floor(elevation);
+    }
+
+    toggleElevation(state: boolean): void {
+        this.isElevationSelected = state;
+    }
+
+    setBrushSize(size: number): void {
+        this.brushSize = ~~size;
+    }
+
+    setRiverMode(mode: OptionalToggle): void {
+        this.riverMode = mode;
     }
 }

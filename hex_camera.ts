@@ -1,5 +1,228 @@
 ///<reference path="babylon.d.ts" />
 
+class HexGridFreeCameraMouseInput extends BABYLON.FreeCameraMouseInput {
+    // /**
+    //  * Defines the camera the input is attached to.
+    //  */
+    // public camera: BABYLON.FreeCamera;
+
+    // /**
+    //  * Defines the buttons associated with the input to handle camera move.
+    //  */
+    // @BABYLON.serialize()
+    // public buttons = [0, 1, 2];
+
+    // /**
+    //  * Defines the pointer angular sensibility  along the X and Y axis or how fast is the camera rotating.
+    //  */
+    // @BABYLON.serialize()
+    // public angularSensibility = 2000.0;
+
+    private pointerInput: (p: BABYLON.PointerInfo, s: BABYLON.EventState) => void;
+    private onMouseMove: BABYLON.Nullable<(e: MouseEvent) => any>;
+    private observer: BABYLON.Nullable<BABYLON.Observer<BABYLON.PointerInfo>>;
+    private _previousPosition: BABYLON.Nullable<{ x: number, y: number }> = null;
+
+    // /**
+    //  * Observable for when a pointer move event occurs containing the move offset
+    //  */
+    // public onPointerMovedObservable = new BABYLON.Observable<{ offsetX: number, offsetY: number }>();
+    // /**
+    //  * @hidden
+    //  * If the camera should be rotated automatically based on pointer movement
+    //  */
+    // public _allowCameraRotation = true;
+    // /**
+    //  * Manage the mouse inputs to control the movement of a free camera.
+    //  * @see http://doc.babylonjs.com/how_to/customizing_camera_inputs
+    //  * @param touchEnabled Defines if touch is enabled or not
+    //  */
+    // constructor(
+    //     /**
+    //      * Define if touch is enabled in the mouse input
+    //      */
+    //     public touchEnabled = true) {
+    // }
+
+    /**
+     * Attach the input controls to a specific dom element to get the input from.
+     * @param element Defines the element the controls should be listened from
+     * @param noPreventDefault Defines whether event caught by the controls should call preventdefault() (https://developer.mozilla.org/en-US/docs/Web/API/Event/preventDefault)
+     */
+    public attachControl(element: HTMLElement, noPreventDefault?: boolean): void {
+        var engine = this.camera.getEngine();
+
+        if (!this.pointerInput) {
+            this.pointerInput = (p) => {
+                var evt = <PointerEvent>p.event;
+
+                if (engine.isInVRExclusivePointerMode) {
+                    return;
+                }
+
+                if (!this.touchEnabled && evt.pointerType === "touch") {
+                    return;
+                }
+
+                if (p.type !== BABYLON.PointerEventTypes.POINTERMOVE && this.buttons.indexOf(evt.button) === -1) {
+                    return;
+                }
+
+                let srcElement = <HTMLElement>(evt.srcElement || evt.target);
+
+                if (p.type === BABYLON.PointerEventTypes.POINTERDOWN && srcElement) {
+                    if (evt.which != 3) {
+                        return;
+                    }
+
+                    try {
+                        srcElement.setPointerCapture(evt.pointerId);
+                    } catch (e) {
+                        //Nothing to do with the error. Execution will continue.
+                    }
+
+                    this._previousPosition = {
+                        x: evt.clientX,
+                        y: evt.clientY
+                    };
+
+                    if (!noPreventDefault) {
+                        evt.preventDefault();
+                        element.focus();
+                    }
+                }
+                else if (p.type === BABYLON.PointerEventTypes.POINTERUP && srcElement) {
+                    if (evt.which != 3) {
+                        return;
+                    }
+
+                    try {
+                        srcElement.releasePointerCapture(evt.pointerId);
+                    } catch (e) {
+                        //Nothing to do with the error.
+                    }
+
+                    this._previousPosition = null;
+                    if (!noPreventDefault) {
+                        evt.preventDefault();
+                    }
+                }
+
+                else if (p.type === BABYLON.PointerEventTypes.POINTERMOVE) {
+                    if (!this._previousPosition || engine.isPointerLock) {
+                        return;
+                    }
+
+                    var offsetX = evt.clientX - this._previousPosition.x;
+                    var offsetY = evt.clientY - this._previousPosition.y;
+                    if (this.camera.getScene().useRightHandedSystem) { offsetX *= -1; }
+                    if (this.camera.parent && this.camera.parent._getWorldMatrixDeterminant() < 0) { offsetX *= -1; }
+
+                    if (this._allowCameraRotation) {
+                        this.camera.cameraRotation.y += offsetX / this.angularSensibility;
+                        this.camera.cameraRotation.x += offsetY / this.angularSensibility;
+                    }
+                    this.onPointerMovedObservable.notifyObservers({offsetX: offsetX, offsetY: offsetY});
+
+                    this._previousPosition = {
+                        x: evt.clientX,
+                        y: evt.clientY
+                    };
+
+                    if (!noPreventDefault) {
+                        evt.preventDefault();
+                    }
+                }
+            };
+        }
+
+        this.onMouseMove = (evt) => {
+            if (!engine.isPointerLock) {
+                return;
+            }
+
+            if (engine.isInVRExclusivePointerMode) {
+                return;
+            }
+
+            var offsetX = evt.movementX || evt.mozMovementX || evt.webkitMovementX || evt.msMovementX || 0;
+            if (this.camera.getScene().useRightHandedSystem) { offsetX *= -1; }
+            if (this.camera.parent && this.camera.parent._getWorldMatrixDeterminant() < 0) { offsetX *= -1; }
+            this.camera.cameraRotation.y += offsetX / this.angularSensibility;
+
+            var offsetY = evt.movementY || evt.mozMovementY || evt.webkitMovementY || evt.msMovementY || 0;
+            this.camera.cameraRotation.x += offsetY / this.angularSensibility;
+
+            this._previousPosition = null;
+
+            if (!noPreventDefault) {
+                evt.preventDefault();
+            }
+        };
+
+        this.observer = this.camera.getScene().onPointerObservable.add(
+            this.pointerInput, BABYLON.PointerEventTypes.POINTERDOWN | 
+            BABYLON.PointerEventTypes.POINTERUP | 
+            BABYLON.PointerEventTypes.POINTERMOVE
+        );
+
+        element.addEventListener("mousemove", this.onMouseMove, false);
+
+        element.addEventListener("contextmenu",
+            <EventListener>this.onContextMenu.bind(this), false);
+    }
+
+    /**
+     * Called on JS contextmenu event.
+     * Override this method to provide functionality.
+     */
+    protected onContextMenu(evt: PointerEvent): void {
+        evt.preventDefault();
+    }
+
+    /**
+     * Detach the current controls from the specified dom element.
+     * @param element Defines the element to stop listening the inputs from
+     */
+    public detachControl(element: BABYLON.Nullable<HTMLElement>): void {
+        if (this.observer && element) {
+            this.camera.getScene().onPointerObservable.remove(this.observer);
+
+            if (this.onMouseMove) {
+                element.removeEventListener("mousemove", this.onMouseMove);
+            }
+
+            if (this.onContextMenu) {
+                element.removeEventListener("contextmenu", <EventListener>this.onContextMenu);
+            }
+
+            if (this.onPointerMovedObservable) {
+                this.onPointerMovedObservable.clear();
+            }
+
+            this.observer = null;
+            this.onMouseMove = null;
+            this._previousPosition = null;
+        }
+    }
+
+    /**
+     * Gets the class name of the current intput.
+     * @returns the class name
+     */
+    public getClassName(): string {
+        return "FreeCameraMouseInput";
+    }
+
+    /**
+     * Get the friendly name associated with the input class.
+     * @returns the input friendly name
+     */
+    public getSimpleName(): string {
+        return "mouse";
+    }
+}
+
 class HexCamera extends BABYLON.Camera {
 
     public inputs: HexCameraInputsManager;
@@ -32,11 +255,51 @@ class HexCamera extends BABYLON.Camera {
         this.parent = this.stick;
     }
 
-    // /** @hidden */
-    // public _getViewMatrix(): BABYLON.Matrix {
-    //     // if (this.lockedTarget) {
-    //     //     this.setTarget(this._getLockedTargetPosition()!);
+    // /** @hid
+    //  * Observable for when a pointer move event occurs containing the move offset
+    //  */
+    // public onPointerMovedObservable = new BABYLON.Observable<{ offsetX: number, offsetY: number }>();
+    // /**
+    //  * @hidden
+    //  * If the camera should be rotated automatically based on pointer movement
+    //  */
+    // public _allowCameraRotation = true;
+    // public _
+    //  * Observable for when a pointer move event occurs containing the move offset
+    //  */
+    // public onPointerMovedObservable = new BABYLON.Observable<{ offsetX: number, offsetY: number }>();
+    // /**
+    //  * @hidden
+    //  * If the camera should be rotated automatically based on pointer movement
+    //  */
+    // public _allowCameraRotation = true;rix {
+    //     // i
+    //  * Observable for when a pointer move event occurs containing the move offset
+    //  */
+    // public onPointerMovedObservable = new BABYLON.Observable<{ offsetX: number, offsetY: number }>();
+    // /**
+    //  * @hidden
+    //  * If the camera should be rotated automatically based on pointer movement
+    //  */
+    // public _allowCameraRotation = true;
+    //     //  
+    //  * Observable for when a pointer move event occurs containing the move offset
+    //  */
+    // public onPointerMovedObservable = new BABYLON.Observable<{ offsetX: number, offsetY: number }>();
+    // /**
+    //  * @hidden
+    //  * If the camera should be rotated automatically based on pointer movement
+    //  */
+    // public _allowCameraRotation = true;ockedTargetPosition()!);
     //     // }
+    //  * Observable for when a pointer move event occurs containing the move offset
+    //  */
+    // public onPointerMovedObservable = new BABYLON.Observable<{ offsetX: number, offsetY: number }>();
+    // /**
+    //  * @hidden
+    //  * If the camera should be rotated automatically based on pointer movement
+    //  */
+    // public _allowCameraRotation = true;
 
     //     // Compute
     //     this._updateCameraRotationMatrix();
