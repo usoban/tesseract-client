@@ -1,5 +1,6 @@
 ///<reference path="babylon.d.ts" />
 ///<reference path="hex.ts" />
+///<reference path="hex_camera.ts" />
 
 class Game {
     private _canvas: HTMLCanvasElement;
@@ -25,6 +26,7 @@ class Game {
 
         // Create a FreeCamera, and set its position to (x:0, y:5, z:-10).
         this._camera = new BABYLON.FreeCamera('camera1', new BABYLON.Vector3(11, 65,-27), this._scene);
+        // this._camera = new HexCamera("camera", new BABYLON.Vector3(11, 65, -27), this._scene);
 
         // Target the camera to scene origin.
         this._camera.setTarget(BABYLON.Vector3.Zero());
@@ -65,6 +67,10 @@ class Game {
                 // this._hexGrid.touchCell(pickResult.pickedPoint);
                 this._hexMapEditor.handleInput(pickResult.pickedPoint);
             }
+        });
+
+        this._scene.registerBeforeRender(() => {
+            HexGrid.refresh();
         });
     }
 }

@@ -604,6 +604,9 @@ class HexGridChunk {
         cell.chunk = this;
     }
     refresh() {
+        HexGrid.CHUNKS_TO_REFRESH.set(this.hexMesh.name, this); //[this.hexMesh.name] = this;
+    }
+    doRefresh() {
         this.hexMesh.triangulate(this.cells);
     }
 }
@@ -611,12 +614,18 @@ class HexGrid {
     constructor(scene) {
         this.cellCountX = 6;
         this.cellCountZ = 6;
-        this.chunkCountX = 7;
-        this.chunkCountZ = 7;
+        this.chunkCountX = 3;
+        this.chunkCountZ = 3;
         this.defaultColor = HexCellColor.PASTEL_BLUE;
         this._scene = scene;
         this.cellCountX = this.chunkCountX * HexMetrics.chunkSizeX;
         this.cellCountZ = this.chunkCountZ * HexMetrics.chunkSizeZ;
+    }
+    static refresh() {
+        HexGrid.CHUNKS_TO_REFRESH.forEach((c, k, _) => {
+            c.doRefresh();
+        });
+        HexGrid.CHUNKS_TO_REFRESH = new Map();
     }
     generate() {
         let texture = new BABYLON.Texture('./assets/gfx/material/noise.png', this._scene, false, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, null, null, null, null, BABYLON.Engine.TEXTUREFORMAT_RGBA);
@@ -702,6 +711,7 @@ class HexGrid {
             }
         }
         this.addCellToChunk(x, z, cell);
+        cell.isVisible = false;
         return cell;
     }
     makeCellText(txt) {
@@ -724,6 +734,7 @@ class HexGrid {
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
 }
+HexGrid.CHUNKS_TO_REFRESH = new Map();
 // public static defaultGridonfiguration = {};
 HexGrid.defaultGridonfiguration = {
     "(0, -1, 1)": { color: HexCellColor.PASTEL_YELLOW, elevation: 1 },

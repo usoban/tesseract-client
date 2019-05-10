@@ -526,7 +526,7 @@ class HexMesh extends BABYLON.Mesh {
         }
     }
 
-    triangulateCellConnection(direction: HexDirection, cell: HexCell, e1: EdgeVertices) {
+    triangulateCellConnection(direction: HexDirection, cell: HexCell, e1: EdgeVertices): void {
         let neighbor = cell.getNeighbor(direction);
             
         if (neighbor == null) {
@@ -572,7 +572,7 @@ class HexMesh extends BABYLON.Mesh {
         bottom: BABYLON.Vector3, bottomCell: HexCell,
         left: BABYLON.Vector3, leftCell: HexCell,
         right: BABYLON.Vector3, rightCell: HexCell
-    ) {
+    ): void {
         let
             leftEdgeType = bottomCell.getEdgeTypeForCell(leftCell),
             rightEdgeType = bottomCell.getEdgeTypeForCell(rightCell);
@@ -614,7 +614,7 @@ class HexMesh extends BABYLON.Mesh {
         begin: BABYLON.Vector3, beginCell: HexCell,
         left: BABYLON.Vector3, leftCell: HexCell,
         right: BABYLON.Vector3, rightCell: HexCell
-    ) {
+    ): void {
         let
             v3 = HexMetrics.terraceLerp(begin, left, 1),
             v4 = HexMetrics.terraceLerp(begin, right, 1),
@@ -652,7 +652,7 @@ class HexMesh extends BABYLON.Mesh {
         begin: BABYLON.Vector3, beginCell: HexCell,
         left: BABYLON.Vector3, leftCell: HexCell,
         right: BABYLON.Vector3, rightCell: HexCell
-    ) {
+    ): void {
         let
             b = Math.abs(1.0 / (rightCell.elevation - beginCell.elevation)),
             boundry = BABYLON.Vector3.Lerp(this.perturb(begin), this.perturb(right), b),
@@ -672,7 +672,7 @@ class HexMesh extends BABYLON.Mesh {
         begin: BABYLON.Vector3, beginCell: HexCell,
         left: BABYLON.Vector3, leftCell: HexCell,
         right: BABYLON.Vector3, rightCell: HexCell
-    ) {
+    ): void {
         let
             b = Math.abs(1.0 / (leftCell.elevation - beginCell.elevation)),
             boundry = BABYLON.Vector3.Lerp(this.perturb(begin), this.perturb(left), b),
@@ -692,7 +692,7 @@ class HexMesh extends BABYLON.Mesh {
         begin: BABYLON.Vector3, beginCell: HexCell,
         left: BABYLON.Vector3, leftCell: HexCell,
         boundry: BABYLON.Vector3, boundryColor: BABYLON.Color4
-    ) {
+    ): void {
         let
             v2 = this.perturb(HexMetrics.terraceLerp(begin, left, 1)),
             c2 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1);
@@ -719,7 +719,7 @@ class HexMesh extends BABYLON.Mesh {
         this.addTriangleColor(c2, leftCell.color, boundryColor);
     }
 
-    triangulateCellEdgeTerraces(begin: EdgeVertices, beginCell: HexCell, end: EdgeVertices, endCell: HexCell) {
+    triangulateCellEdgeTerraces(begin: EdgeVertices, beginCell: HexCell, end: EdgeVertices, endCell: HexCell): void {
         let
             e2 = EdgeVertices.terraceLerp(begin, end, 1),
             c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, 1);
@@ -740,7 +740,7 @@ class HexMesh extends BABYLON.Mesh {
         this.triangulateEdgeStrip(e2, c2, end, endCell.color);
     }
 
-    addTriangle(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3) {
+    addTriangle(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3): void {
         const vertexIndex = this._vertices.length/3;
         this.addVertex(this.perturb(v1));
         this.addVertex(this.perturb(v2));
@@ -750,7 +750,7 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles.push(vertexIndex + 2);
     }
 
-    addTriangleUnperturbed(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3) {
+    addTriangleUnperturbed(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3): void {
         let vertexIndex = this._vertices.length/3;
         this.addVertex(v1);
         this.addVertex(v2);
@@ -760,19 +760,19 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles.push(vertexIndex + 2);
     }
 
-    addSingleTriangleColor(color: BABYLON.Color4) {
+    addSingleTriangleColor(color: BABYLON.Color4): void {
         this.addColor(color);
         this.addColor(color);
         this.addColor(color);
     }
 
-    addTriangleColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4) {
+    addTriangleColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4): void {
         this.addColor(color1);
         this.addColor(color2);
         this.addColor(color3);
     }
 
-    addQuad(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3, v4: BABYLON.Vector3) {
+    addQuad(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3, v4: BABYLON.Vector3): void {
         const vertexIndex = this._vertices.length/3;
         this.addVertex(this.perturb(v1));
         this.addVertex(this.perturb(v2));
@@ -786,7 +786,7 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles.push(vertexIndex + 3);
     }
 
-    addQuadColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4, color4: BABYLON.Color4) {
+    addQuadColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4, color4: BABYLON.Color4): void {
         this.addColor(color1);
         this.addColor(color2);
         this.addColor(color3);
@@ -801,13 +801,13 @@ class HexMesh extends BABYLON.Mesh {
         this.addColor(color2);
     }
 
-    addVertex(vertex: BABYLON.Vector3) {
+    addVertex(vertex: BABYLON.Vector3): void {
         this._vertices.push(vertex.x);
         this._vertices.push(vertex.y);
         this._vertices.push(vertex.z);        
     }
 
-    addColor(color: BABYLON.Color4) {
+    addColor(color: BABYLON.Color4): void {
         this._colors.push(color.r);
         this._colors.push(color.g);
         this._colors.push(color.b);
@@ -830,15 +830,21 @@ class HexGridChunk {
     }
 
     refresh(): void {
+        HexGrid.CHUNKS_TO_REFRESH.set(this.hexMesh.name, this);  //[this.hexMesh.name] = this;
+    }
+
+    doRefresh(): void {
         this.hexMesh.triangulate(this.cells);
     }
 }
 
 class HexGrid {
+    public static CHUNKS_TO_REFRESH: Map<string, HexGridChunk> = new Map<string, HexGridChunk>();
+
     private cellCountX: number = 6;
     private cellCountZ: number = 6;
-    public chunkCountX: number = 7;
-    public chunkCountZ: number = 7;
+    public chunkCountX: number = 3;
+    public chunkCountZ: number = 3;
     public cells: HexCell[];
     public chunks: HexGridChunk[];
     private _scene: BABYLON.Scene;
@@ -868,6 +874,14 @@ class HexGrid {
         this._scene = scene;
         this.cellCountX = this.chunkCountX * HexMetrics.chunkSizeX;
         this.cellCountZ = this.chunkCountZ * HexMetrics.chunkSizeZ;
+    }
+
+    public static refresh(): void {
+        HexGrid.CHUNKS_TO_REFRESH.forEach((c: HexGridChunk, k, _) => {
+            c.doRefresh();
+        });
+
+        HexGrid.CHUNKS_TO_REFRESH = new Map<string, HexGridChunk>();
     }
 
     generate(): void {
@@ -945,7 +959,7 @@ class HexGrid {
         }
     }
 
-    getCell(position: BABYLON.Vector3) {
+    getCell(position: BABYLON.Vector3): HexCell {
         let 
             coordinates = HexCooridnates.fromPosition(position),
             index = coordinates.x + coordinates.z * this.cellCountX + Math.floor(coordinates.z/2.0);
@@ -1003,6 +1017,8 @@ class HexGrid {
         }
 
         this.addCellToChunk(x, z, cell);
+
+        cell.isVisible = false;
 
         return cell;
     }
