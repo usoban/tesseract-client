@@ -17,7 +17,7 @@ class HexMetrics {
     public static verticalTerraceStepSize = (1.0 / (HexMetrics.terracesPerSlope + 1));
     public static noiseTexture: Texture;
     public static noiseScale = 0.7;
-    public static cellPerturbStrength = 0; //4.0;
+    public static cellPerturbStrength = 4.0;
     public static elevationPerturbStrength = 1.5;
     public static chunkSizeX = 5;
     public static chunkSizeZ = 5;
@@ -274,11 +274,9 @@ class HexCellColor {
 
     private static colors: Array<BABYLON.Color4> = [
         BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_YELLOW, // hex yellow, with alpha
-        BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_BLUE, // hex blue, with alpha
-        BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_GREEN //hex green, with alpha
+        HexCellColor.PASTEL_YELLOW,
+        HexCellColor.PASTEL_BLUE,
+        HexCellColor.PASTEL_GREEN
     ];
 
     public static default() {
@@ -554,13 +552,9 @@ class EdgeVertices {
 
 class HexMesh extends BABYLON.Mesh {
     private static _material: BABYLON.StandardMaterial = null;
-    // private static _vertices: Array<number> = [];
-    // private static _triangles: Array<number> = [];
-    // private static _colors: Array<number> = [];
-
-    private _vertices: Array<number> = [];
-    private _triangles: Array<number> = [];
-    private _colors: Array<number> = [];
+    private static _vertices: Array<number> = [];
+    private static _triangles: Array<number> = [];
+    private static _colors: Array<number> = [];
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -594,18 +588,10 @@ class HexMesh extends BABYLON.Mesh {
         );
     }
 
-    // public static triangulate(mesh: HexMesh, cells: HexCell[]) {
-    //     HexMesh._vertices = [];
-    //     HexMesh._triangles = [];
-    //     HexMesh._colors = [];
-
-    //     mesh.triangulate(cells);
-    // }
-
     triangulate(cells: HexCell[]) {
-        this._vertices = [];
-        this._triangles = [];
-        this._colors = [];
+        HexMesh._vertices = [];
+        HexMesh._triangles = [];
+        HexMesh._colors = [];
 
         for (let i = 0; i < cells.length; i++) {
             for (let direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
@@ -617,11 +603,11 @@ class HexMesh extends BABYLON.Mesh {
             vertexData = new BABYLON.VertexData(),
             normals = [];
 
-        BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals);
+        BABYLON.VertexData.ComputeNormals(HexMesh._vertices, HexMesh._triangles, normals);
         
-        vertexData.positions = this._vertices;
-        vertexData.indices = this._triangles;
-        vertexData.colors = this._colors;
+        vertexData.positions = HexMesh._vertices;
+        vertexData.indices = HexMesh._triangles;
+        vertexData.colors = HexMesh._colors;
         vertexData.normals = normals;
 
         vertexData.applyToMesh(this, true);
@@ -714,7 +700,7 @@ class HexMesh extends BABYLON.Mesh {
         this.addTriangleColor1(cell.color);
     }
 
-    triangulateWithRiverBeginOrEnd(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {        
+    triangulateWithRiverBeginOrEnd(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
         let m = EdgeVertices.fromCorners(
             BABYLON.Vector3.Lerp(center, e.v1, 0.5),
             BABYLON.Vector3.Lerp(center, e.v5, 0.5)
@@ -992,23 +978,23 @@ class HexMesh extends BABYLON.Mesh {
     }
 
     addTriangle(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3): void {
-        const vertexIndex = this._vertices.length/3;
+        const vertexIndex = HexMesh._vertices.length/3;
         this.addVertex(this.perturb(v1));
         this.addVertex(this.perturb(v2));
         this.addVertex(this.perturb(v3));
-        this._triangles.push(vertexIndex);
-        this._triangles.push(vertexIndex + 1);
-        this._triangles.push(vertexIndex + 2);
+        HexMesh._triangles.push(vertexIndex);
+        HexMesh._triangles.push(vertexIndex + 1);
+        HexMesh._triangles.push(vertexIndex + 2);
     }
 
     addTriangleUnperturbed(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3): void {
-        let vertexIndex = this._vertices.length/3;
+        let vertexIndex = HexMesh._vertices.length/3;
         this.addVertex(v1);
         this.addVertex(v2);
         this.addVertex(v3);
-        this._triangles.push(vertexIndex);
-        this._triangles.push(vertexIndex + 1);
-        this._triangles.push(vertexIndex + 2);
+        HexMesh._triangles.push(vertexIndex);
+        HexMesh._triangles.push(vertexIndex + 1);
+        HexMesh._triangles.push(vertexIndex + 2);
     }
 
     addTriangleColor1(color: BABYLON.Color4): void {
@@ -1024,17 +1010,17 @@ class HexMesh extends BABYLON.Mesh {
     }
 
     addQuad(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3, v4: BABYLON.Vector3): void {
-        const vertexIndex = this._vertices.length/3;
+        const vertexIndex = HexMesh._vertices.length/3;
         this.addVertex(this.perturb(v1));
         this.addVertex(this.perturb(v2));
         this.addVertex(this.perturb(v3));
         this.addVertex(this.perturb(v4));
-        this._triangles.push(vertexIndex);
-        this._triangles.push(vertexIndex + 2);
-        this._triangles.push(vertexIndex + 1);
-        this._triangles.push(vertexIndex + 1);
-        this._triangles.push(vertexIndex + 2);
-        this._triangles.push(vertexIndex + 3);
+        HexMesh._triangles.push(vertexIndex);
+        HexMesh._triangles.push(vertexIndex + 2);
+        HexMesh._triangles.push(vertexIndex + 1);
+        HexMesh._triangles.push(vertexIndex + 1);
+        HexMesh._triangles.push(vertexIndex + 2);
+        HexMesh._triangles.push(vertexIndex + 3);
     }
 
     addQuadColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4, color4: BABYLON.Color4): void {
@@ -1057,20 +1043,20 @@ class HexMesh extends BABYLON.Mesh {
         this.addColor(color);
         this.addColor(color);
         this.addColor(color);
-        this.addColor(color);        
+        this.addColor(color);
     }
 
     addVertex(vertex: BABYLON.Vector3): void {
-        this._vertices.push(vertex.x);
-        this._vertices.push(vertex.y);
-        this._vertices.push(vertex.z);        
+        HexMesh._vertices.push(vertex.x);
+        HexMesh._vertices.push(vertex.y);
+        HexMesh._vertices.push(vertex.z);
     }
 
     addColor(color: BABYLON.Color4): void {
-        this._colors.push(color.r);
-        this._colors.push(color.g);
-        this._colors.push(color.b);
-        this._colors.push(color.a);
+        HexMesh._colors.push(color.r);
+        HexMesh._colors.push(color.g);
+        HexMesh._colors.push(color.b);
+        HexMesh._colors.push(color.a);
     }
 }
 
@@ -1168,7 +1154,7 @@ class HexGrid {
             return outputData;
         };
 
-        texture.onLoadObservable.addOnce((event, estate) => {            
+        texture.onLoadObservable.addOnce((event, estate) => {
             let noiseTexture: Texture,
                 bilinearTexture: Texture;
 
@@ -1480,7 +1466,7 @@ class HexMapEditor {
         this.isDrag = false;
     }
 
-    editCell(cell: Nullable<HexCell>) {
+    editCell(cell: Nullable<HexCell>): void {
         if (!cell) {
             return;
         }
@@ -1505,7 +1491,7 @@ class HexMapEditor {
         }
     }
 
-    editCells(centerCell: HexCell) {
+    editCells(centerCell: HexCell): void {
         const
             centerX = centerCell.coordinates.x,
             centerZ = centerCell.coordinates.z;
