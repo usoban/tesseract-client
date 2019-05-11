@@ -4,8 +4,10 @@
 type Nullable<T> = T | null;
 
 class HexMetrics {
+    public static outerToInner = 0.866025404;
+    public static innerToOuter = 1.0 / HexMetrics.outerToInner;
     public static outerRadius: number = 10.0;
-    public static innerRadius: number = HexMetrics.outerRadius * 0.866025404;
+    public static innerRadius: number = HexMetrics.outerRadius * HexMetrics.outerToInner;
     public static solidFactor: number = 0.8;
     public static blendFactor: number = 1.0 - HexMetrics.solidFactor;
     public static elevationStep: number = 3.0;
@@ -15,10 +17,11 @@ class HexMetrics {
     public static verticalTerraceStepSize = (1.0 / (HexMetrics.terracesPerSlope + 1));
     public static noiseTexture: Texture;
     public static noiseScale = 0.7;
-    public static cellPerturbStrength = 4.0;
+    public static cellPerturbStrength = 0; //4.0;
     public static elevationPerturbStrength = 1.5;
     public static chunkSizeX = 5;
     public static chunkSizeZ = 5;
+    public static streamBedElevationOffset = -1.0;
 
     private static corners: Array<BABYLON.Vector3> = [
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
@@ -44,6 +47,14 @@ class HexMetrics {
 
     public static getSecondSolidCorner(direction: HexDirection): BABYLON.Vector3 {
         return HexMetrics.corners[direction + 1].scale(HexMetrics.solidFactor);
+    }
+
+    public static getSolidEdgeMiddle(direction: HexDirection): BABYLON.Vector3 {
+        return (
+            HexMetrics.corners[direction]
+            .add(HexMetrics.corners[direction + 1])
+            .scale(0.5 * HexMetrics.solidFactor)
+        );
     }
 
     public static getBridge(direction: HexDirection): BABYLON.Vector3 {
@@ -186,8 +197,18 @@ namespace HexDirection {
         return direction === HexDirection.NE ? HexDirection.NW : (direction - 1);
     }
 
+    export function previous2(direction: HexDirection): HexDirection {
+        direction -= 2;
+        return direction >=  HexDirection.NE ? direction : (direction + 6);
+    }
+ 
     export function next(direction: HexDirection): HexDirection {
         return direction === HexDirection.NW ? HexDirection.NE : (direction + 1);
+    }
+
+    export function next2(direction: HexDirection): HexDirection {
+        direction += 2;
+        return direction <= HexDirection.NW ? direction : (direction - 6);
     }
 }
 
@@ -300,6 +321,7 @@ class HexCell extends BABYLON.Mesh {
     private _hasOutgoingRiver: boolean;
     private _incomingRiver: HexDirection;
     private _outgoingRiver: HexDirection;
+    private _streamBedY: number;
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -459,6 +481,10 @@ class HexCell extends BABYLON.Mesh {
         this.removeIncomingRiver();
     }
 
+    public get streamBedY(): number {
+        return (this._elevation + HexMetrics.streamBedElevationOffset) * HexMetrics.elevationStep;
+    }
+
     // Sets mesh render position from cellPosition (renders it slightly above).
     private refreshPosition(): void {
         this.position = this._cellPosition.clone();
@@ -499,14 +525,16 @@ class EdgeVertices {
     public v2: BABYLON.Vector3;
     public v3: BABYLON.Vector3;
     public v4: BABYLON.Vector3;
+    public v5: BABYLON.Vector3;
 
-    public static fromCorners(corner1: BABYLON.Vector3, corner2: BABYLON.Vector3) {
+    public static fromCorners(corner1: BABYLON.Vector3, corner2: BABYLON.Vector3, outerStep: number = 0.25) {
         let result = new EdgeVertices();
 
         result.v1 = corner1;
-        result.v2 = BABYLON.Vector3.Lerp(corner1, corner2, 1.0/3.0);
-        result.v3 = BABYLON.Vector3.Lerp(corner1, corner2, 2.0/3.0);
-        result.v4 = corner2;
+        result.v2 = BABYLON.Vector3.Lerp(corner1, corner2, outerStep);
+        result.v3 = BABYLON.Vector3.Lerp(corner1, corner2, 0.5);
+        result.v4 = BABYLON.Vector3.Lerp(corner1, corner2, 1.0 - outerStep);
+        result.v5 = corner2;
 
         return result;
     }
@@ -518,6 +546,7 @@ class EdgeVertices {
         result.v2 = HexMetrics.terraceLerp(a.v2, b.v2, step);
         result.v3 = HexMetrics.terraceLerp(a.v3, b.v3, step);
         result.v4 = HexMetrics.terraceLerp(a.v4, b.v4, step);
+        result.v5 = HexMetrics.terraceLerp(a.v5, b.v5, step);
 
         return result;
     } 
@@ -600,24 +629,6 @@ class HexMesh extends BABYLON.Mesh {
         this._setReady(true);
     }
 
-    triangulateEdgeFan(center: BABYLON.Vector3, edge: EdgeVertices, color: BABYLON.Color4) {
-        this.addTriangle(center, edge.v1, edge.v2);
-        this.addSingleTriangleColor(color);
-        this.addTriangle(center, edge.v2, edge.v3);
-        this.addSingleTriangleColor(color);
-        this.addTriangle(center, edge.v3, edge.v4);
-        this.addSingleTriangleColor(color);
-    }
-
-    triangulateEdgeStrip(e1: EdgeVertices, c1: BABYLON.Color4, e2: EdgeVertices, c2: BABYLON.Color4) {
-        this.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
-        this.addQuadColor2(c1, c2);
-        this.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
-        this.addQuadColor2(c1, c2);
-        this.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
-        this.addQuadColor2(c1, c2);
-    }
-
     triangulateCell(direction: HexDirection, cell: HexCell): void {
         let
             center = cell.cellPosition.clone(),
@@ -626,11 +637,140 @@ class HexMesh extends BABYLON.Mesh {
                 center.add(HexMetrics.getSecondSolidCorner(direction))
             );
 
-        this.triangulateEdgeFan(center, e, cell.color);
+        if (cell.hasRiver) {
+            if (cell.hasRiverThroughEdge(direction)) {
+                e.v3.y = cell.streamBedY;
+                if (cell.hasRiverBeginingOrEnd) {
+                    this.triangulateWithRiverBeginOrEnd(direction, cell, center, e);
+                }
+                else {
+                    this.triangulateCellWithRiver(direction, cell, center, e);
+                }
+            }
+            else {
+                this.triangulateAdjecentToRiver(direction, cell, center, e);
+            }
+        } 
+        else {
+            this.triangulateEdgeFan(center, e, cell.color);
+        }
 
         if (direction <= HexDirection.SE) {
             this.triangulateCellConnection(direction, cell, e);
         }
+    }
+
+    triangulateCellWithRiver(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
+        let 
+            prevDir = HexDirection.previous(direction),
+            nextDir = HexDirection.next(direction),
+            prev2Dir = HexDirection.next(direction),
+            next2Dir = HexDirection.next2(direction),
+            oppositeDir = HexDirection.opposite(direction),
+            centerL: BABYLON.Vector3, 
+            centerR: BABYLON.Vector3, 
+            m: EdgeVertices;
+
+        if (cell.hasRiverThroughEdge(oppositeDir)) {
+            centerL = center.add(HexMetrics.getFirstSolidCorner(prevDir).scale(0.25));
+            centerR = center.add(HexMetrics.getSecondSolidCorner(nextDir).scale(0.25));
+        } 
+        else if (cell.hasRiverThroughEdge(nextDir)) {
+            centerL = center;
+            centerR = BABYLON.Vector3.Lerp(center, e.v5, 2/3);
+        }
+        else if (cell.hasRiverThroughEdge(prevDir)) {
+            centerL = BABYLON.Vector3.Lerp(center, e.v1, 2/3);
+            centerR = center;
+        }
+        else if (cell.hasRiverThroughEdge(next2Dir)) {
+            centerL = center;
+            centerR = center.add(HexMetrics.getSolidEdgeMiddle(nextDir).scale(0.5 * HexMetrics.innerToOuter));
+        }
+        else {
+            centerL = center.add(HexMetrics.getSolidEdgeMiddle(prevDir).scale(0.5 * HexMetrics.innerToOuter));
+            centerR = center;
+        }
+
+        center = BABYLON.Vector3.Lerp(centerL, centerR, 0.5);
+
+        m = EdgeVertices.fromCorners(
+            BABYLON.Vector3.Lerp(centerL, e.v1, 0.5), 
+            BABYLON.Vector3.Lerp(centerR, e.v5, 0.5),
+            1/6
+        );
+
+        m.v3.y = center.y = e.v3.y;
+
+        this.triangulateEdgeStrip(m, cell.color, e, cell.color);
+
+        this.addTriangle(centerL, m.v1, m.v2);
+        this.addTriangleColor1(cell.color);
+        this.addQuad(centerL, center, m.v2, m.v3);
+        this.addQuadColor1(cell.color);
+        this.addQuad(center, centerR, m.v3, m.v4);
+        this.addQuadColor1(cell.color);
+        this.addTriangle(centerR, m.v4, m.v5);
+        this.addTriangleColor1(cell.color);
+    }
+
+    triangulateWithRiverBeginOrEnd(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {        
+        let m = EdgeVertices.fromCorners(
+            BABYLON.Vector3.Lerp(center, e.v1, 0.5),
+            BABYLON.Vector3.Lerp(center, e.v5, 0.5)
+        );
+
+        m.v3.y = e.v3.y;
+
+        this.triangulateEdgeStrip(m, cell.color, e, cell.color);
+        this.triangulateEdgeFan(center, m, cell.color);
+    }
+
+    triangulateAdjecentToRiver(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
+        if (cell.hasRiverThroughEdge(HexDirection.next(direction))) {
+            if (cell.hasRiverThroughEdge(HexDirection.previous(direction))) {
+                center = center.add(HexMetrics.getSolidEdgeMiddle(direction).scale(0.5 * HexMetrics.innerToOuter));
+            }
+            else if (cell.hasRiverThroughEdge(HexDirection.previous2(direction))) {
+                center = center.add(HexMetrics.getFirstSolidCorner(direction).scale(0.25));
+            }
+        }
+        else if (
+            cell.hasRiverThroughEdge(HexDirection.previous(direction)) &&
+            cell.hasRiverThroughEdge(HexDirection.next2(direction))
+        ) {
+            center = center.add(HexMetrics.getSecondSolidCorner(direction).scale(0.25));
+        }
+        
+        let m = EdgeVertices.fromCorners(
+            BABYLON.Vector3.Lerp(center, e.v1, 0.5),
+            BABYLON.Vector3.Lerp(center, e.v5, 0.5)
+        );
+
+        this.triangulateEdgeStrip(m, cell.color, e, cell.color);
+        this.triangulateEdgeFan(center, m, cell.color);
+    }
+
+    triangulateEdgeFan(center: BABYLON.Vector3, edge: EdgeVertices, color: BABYLON.Color4): void {
+        this.addTriangle(center, edge.v1, edge.v2);
+        this.addTriangleColor1(color);
+        this.addTriangle(center, edge.v2, edge.v3);
+        this.addTriangleColor1(color);
+        this.addTriangle(center, edge.v3, edge.v4);
+        this.addTriangleColor1(color);
+        this.addTriangle(center, edge.v4, edge.v5);
+        this.addTriangleColor1(color);
+    }
+
+    triangulateEdgeStrip(e1: EdgeVertices, c1: BABYLON.Color4, e2: EdgeVertices, c2: BABYLON.Color4): void {
+        this.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
+        this.addQuadColor2(c1, c2);
+        this.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
+        this.addQuadColor2(c1, c2);
+        this.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
+        this.addQuadColor2(c1, c2);
+        this.addQuad(e1.v4, e1.v5, e2.v4, e2.v5);
+        this.addQuadColor2(c1, c2);
     }
 
     triangulateCellConnection(direction: HexDirection, cell: HexCell, e1: EdgeVertices): void {
@@ -643,7 +783,11 @@ class HexMesh extends BABYLON.Mesh {
         let bridge = HexMetrics.getBridge(direction);
         bridge.y = neighbor.cellPosition.y - cell.cellPosition.y;
 
-        let e2 = EdgeVertices.fromCorners(e1.v1.add(bridge), e1.v4.add(bridge));
+        let e2 = EdgeVertices.fromCorners(e1.v1.add(bridge), e1.v5.add(bridge));
+
+        if (cell.hasRiverThroughEdge(direction)) {
+            e2.v3.y = neighbor.streamBedY;
+        }
 
         if (cell.getEdgeType(direction) === HexEdgeType.Slope) {
             this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor);
@@ -656,21 +800,21 @@ class HexMesh extends BABYLON.Mesh {
             nextNeighbor = cell.getNeighbor(nextNeighborDirection);
 
         if (direction <= HexDirection.E && nextNeighbor != null) {
-            let v5 = e1.v4.add(HexMetrics.getBridge(nextNeighborDirection));
+            let v5 = e1.v5.add(HexMetrics.getBridge(nextNeighborDirection));
             v5.y = nextNeighbor.cellPosition.y;
 
             if (cell.elevation <= neighbor.elevation) {
                 if (cell.elevation <= nextNeighbor.elevation) {
-                    this.triangulateCellCorner(e1.v4, cell, e2.v4, neighbor, v5, nextNeighbor);
+                    this.triangulateCellCorner(e1.v5, cell, e2.v5, neighbor, v5, nextNeighbor);
                 } else {
-                    this.triangulateCellCorner(v5, nextNeighbor, e1.v4, cell, e2.v4, neighbor);
+                    this.triangulateCellCorner(v5, nextNeighbor, e1.v5, cell, e2.v5, neighbor);
                 }             
             }
             else if (neighbor.elevation <= nextNeighbor.elevation) {
-                this.triangulateCellCorner(e2.v4, neighbor, v5, nextNeighbor, e1.v4, cell);
+                this.triangulateCellCorner(e2.v5, neighbor, v5, nextNeighbor, e1.v5, cell);
             }
             else {
-                this.triangulateCellCorner(v5, nextNeighbor, e1.v4, cell, e2.v4, neighbor);
+                this.triangulateCellCorner(v5, nextNeighbor, e1.v5, cell, e2.v5, neighbor);
             }
         }
     }
@@ -867,7 +1011,7 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles.push(vertexIndex + 2);
     }
 
-    addSingleTriangleColor(color: BABYLON.Color4): void {
+    addTriangleColor1(color: BABYLON.Color4): void {
         this.addColor(color);
         this.addColor(color);
         this.addColor(color);
@@ -906,6 +1050,14 @@ class HexMesh extends BABYLON.Mesh {
         this.addColor(color1);
         this.addColor(color2);
         this.addColor(color2);
+    }
+
+    /** Adds a single color to the quad. */
+    addQuadColor1(color: BABYLON.Color4) {
+        this.addColor(color);
+        this.addColor(color);
+        this.addColor(color);
+        this.addColor(color);        
     }
 
     addVertex(vertex: BABYLON.Vector3): void {
