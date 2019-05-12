@@ -455,6 +455,10 @@ class HexMesh extends BABYLON.Mesh {
             mat.diffuseColor = BABYLON.Color3.White();
             // mat.specularColor = BABYLON.Color3.Black();
             // mat.wireframe = true;
+            // let mat = new BABYLON.PBRMaterial("pbr_mat", scene);
+            // mat.albedoColor = BABYLON.Color3.White();
+            // mat.metallic = 0;
+            // mat.twoSidedLighting = true;
             HexMesh._material = mat;
         }
         return HexMesh._material;
@@ -845,6 +849,7 @@ class HexGridChunk {
     triangulateRiverQuad(v1, v2, v3, v4, y) {
         v1.y = v2.y = v3.y = v4.y = y;
         this.rivers.addQuad(v1, v2, v3, v4);
+        this.rivers.addQuadUVMinMax(0, 1, 0, 1);
     }
     refresh() {
         HexGrid.CHUNKS_TO_REFRESH.set(this.terrain.name, this);

@@ -30,7 +30,7 @@ class Game {
 
         let mouseInput = new HexGridFreeCameraMouseInput(true);
 
-        this._camera.inputs.remove(this._camera.inputs._mouseInput);        
+        this._camera.inputs.remove(this._camera.inputs._mouseInput);
         this._camera.inputs._mouseInput = mouseInput;
         this._camera.inputs.add(mouseInput);
 
@@ -42,6 +42,7 @@ class Game {
 
         // Create a basic light, aiming 0,1,0 - meaning, to the sky.
         this._light = new BABYLON.HemisphericLight('light1', new BABYLON.Vector3(0, -1.0 ,0), this._scene);
+        // this._light = new BABYLON.DirectionalLight('directional_light', new BABYLON.Vector3(0, -1 ,0), this._scene);
 
         this._hexGrid = new HexGrid(this._scene);
         this._hexGrid.generate();
