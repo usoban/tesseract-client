@@ -1,5 +1,6 @@
 ///<reference path="babylon.d.ts" />
 ///<reference path="babylon.gui.d.ts" />
+///<reference path="babylonjs.materials.module.d.ts" />
 
 type Nullable<T> = T | null;
 
@@ -21,7 +22,7 @@ class HexMetrics {
     public static elevationPerturbStrength = 1.5;
     public static chunkSizeX = 5;
     public static chunkSizeZ = 5;
-    public static streamBedElevationOffset = -1.0;
+    public static streamBedElevationOffset = -1.75;
     public static riverSurfaceElevationOffset = -0.5;
 
     private static corners: Array<BABYLON.Vector3> = [
@@ -314,8 +315,83 @@ class HexCellColor {
 }
 
 class Prefabs {
+    private static _terrainMaterial: BABYLON.StandardMaterial;
+    private static _riverMaterial: BABYLON.PBRCustomMaterial;
+
+    private static terrainMaterial(scene: BABYLON.Scene) {
+        if (!Prefabs._terrainMaterial) {
+            Prefabs._terrainMaterial = new BABYLON.StandardMaterial("terrain_material", scene);
+            Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._terrainMaterial.diffuseColor = BABYLON.Color3.White();
+            // mat.specularColor = BABYLON.Color3.Black();
+            // mat.wireframe = true;    
+        
+            // TODO?: PBR.
+            // let mat = new BABYLON.PBRMaterial("pbr_mat", scene);
+            // mat.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            // mat.emissiveColor = BABYLON.Color3.Black();
+            // mat.albedoColor = BABYLON.Color3.White();
+            // mat.metallic = 0;
+            // mat.twoSidedLighting = true;
+        }
+
+        return Prefabs._terrainMaterial;
+    }
+
+    private static riverMaterial(scene: BABYLON.Scene) {
+        if (!Prefabs._riverMaterial) {
+            Prefabs._riverMaterial = new BABYLON.PBRCustomMaterial("river_material", scene);
+            Prefabs._riverMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._riverMaterial.emissiveColor = BABYLON.Color3.FromHexString("#68AEEB");
+            Prefabs._riverMaterial.albedoColor = BABYLON.Color3.FromHexString("#68AEEB");
+            Prefabs._riverMaterial.metallic = 0;
+            Prefabs._riverMaterial.roughness = 0.5;
+            Prefabs._riverMaterial.alpha = 0.9;
+            Prefabs._riverMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+            Prefabs._riverMaterial.transparencyMode = 2; 
+
+            Prefabs._riverMaterial.albedoTexture = new BABYLON.Texture(
+                './assets/gfx/material/noise.png',
+                scene,
+                true,
+                false
+            );
+            Prefabs._riverMaterial.albedoTexture.hasAlpha = true;
+
+            let t = 0;
+            Prefabs._riverMaterial.AddUniform("time", "vec3", null);
+            Prefabs._riverMaterial.onBindObservable.add(() => {
+                if (Prefabs._riverMaterial && Prefabs._riverMaterial.getEffect && Prefabs._riverMaterial.getEffect()) {
+                    t++;
+                    Prefabs._riverMaterial.getEffect().setVector3("time", new BABYLON.Vector3(1.0, (t % 512)/100, 1.0));
+                }
+            });
+            
+            Prefabs._riverMaterial.Fragment_Custom_Albedo(`
+                vec2 rUV = vAlbedoUV;
+                vec2 rUV2 = vAlbedoUV;
+
+                rUV.x = rUV.x * 0.0625 + time.y * 0.005;
+                rUV.y += time.y * 0.25;
+                vec4 noiseSample = texture2D(albedoSampler, rUV);
+
+                rUV2.x = rUV2.x * 0.0625 - time.y * 0.0052;
+                rUV2.y += time.y * 0.23;
+                vec4 noiseSample2 = texture2D(albedoSampler, rUV2);
+
+                vec4 c = clamp(vAlbedoColor * (noiseSample.r * noiseSample2.a), 0.0, 1.0);
+
+                surfaceAlbedo.rgb = c.rgb;
+                alpha = c.a;
+            `);
+        }
+        
+        return Prefabs._riverMaterial;
+    }
+
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
-        let terrain = new HexMesh(name, scene);
+        let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
 
         terrain.isVisible = true;
         terrain.isPickable = true;
@@ -327,7 +403,7 @@ class Prefabs {
     }
 
     public static rivers(name: string, scene: BABYLON.Scene): HexMesh {
-        let rivers = new HexMesh(name, scene);
+        let rivers = new HexMesh(name, Prefabs.riverMaterial(scene), scene);
 
         rivers.isVisible = true;
         rivers.isPickable = false;
@@ -591,6 +667,17 @@ class EdgeVertices {
 
         return result;
     } 
+
+    clone(): EdgeVertices {
+        let e = new EdgeVertices();
+        e.v1 = this.v1.clone();
+        e.v2 = this.v2.clone();
+        e.v3 = this.v3.clone();
+        e.v4 = this.v4.clone();
+        e.v5 = this.v5.clone();
+
+        return e;
+    }
 }
 
 class HexMesh extends BABYLON.Mesh {
@@ -605,32 +692,12 @@ class HexMesh extends BABYLON.Mesh {
     public _useUVCoordinates: boolean = false;
     public _useCollider: boolean = true;
 
-    constructor(name: string, scene: BABYLON.Scene) {
+    constructor(name: string, material: BABYLON.Material, scene: BABYLON.Scene) {
         super(name, scene);
 
-        this.material = HexMesh.getDefaultMaterial(scene);
+        this.material = material;
 
         this._setReady(false);
-    }
-
-    private static getDefaultMaterial(scene: BABYLON.Scene): BABYLON.Material {
-        if (HexMesh._material === null) {
-            let mat = new BABYLON.StandardMaterial("material", scene);
-            mat.backFaceCulling = false;
-            mat.emissiveColor = BABYLON.Color3.Black();
-            mat.diffuseColor = BABYLON.Color3.White();
-            // mat.specularColor = BABYLON.Color3.Black();
-            // mat.wireframe = true;
-
-            // let mat = new BABYLON.PBRMaterial("pbr_mat", scene);
-            // mat.albedoColor = BABYLON.Color3.White();
-            // mat.metallic = 0;
-            // mat.twoSidedLighting = true;
-
-            HexMesh._material = mat;
-        }
-
-        return HexMesh._material;
     }
 
     apply(): void {
@@ -887,8 +954,10 @@ class HexGridChunk {
         this.terrain.addTriangle(centerR, m.v4, m.v5);
         this.terrain.addTriangleColor1(cell.color);
 
-        this.triangulateRiverQuad(centerL, centerR, m.v2, m.v4, cell.riverSurfaceY);
-        this.triangulateRiverQuad(m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY);
+        let reversed = cell.incomingRiver === direction;
+
+        this.triangulateRiverQuad(centerL, centerR, m.v2, m.v4, cell.riverSurfaceY, 0.4, reversed);
+        this.triangulateRiverQuad(m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed);
     }
 
     triangulateWithRiverBeginOrEnd(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
@@ -901,6 +970,31 @@ class HexGridChunk {
 
         this.triangulateEdgeStrip(m, cell.color, e, cell.color);
         this.triangulateEdgeFan(center, m, cell.color);
+
+        let reversed = cell.hasIncomingRiver;
+        this.triangulateRiverQuad(
+            m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed
+        );
+
+        center = center.clone();
+        m = m.clone();
+        center.y = m.v2.y = m.v4.y = cell.riverSurfaceY;
+        this.rivers.addTriangle(center, m.v2, m.v4);
+
+        if (reversed) {
+            this.rivers.addTriangleUV(
+                new BABYLON.Vector2(0.5, 0.4), 
+                new BABYLON.Vector2(1, 0.2), 
+                new BABYLON.Vector2(0, 0.2)
+            );
+        }
+        else {
+            this.rivers.addTriangleUV(
+                new BABYLON.Vector2(0.5, 0.4),
+                new BABYLON.Vector2(0, 0.6),
+                new BABYLON.Vector2(1, 0.6)
+            );
+        }
     }
 
     triangulateAdjecentToRiver(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
@@ -964,6 +1058,11 @@ class HexGridChunk {
 
         if (cell.hasRiverThroughEdge(direction)) {
             e2.v3.y = neighbor.streamBedY;
+            this.triangulateRiverQuadWithDiff(
+                e1.v2, e1.v4, e2.v2, e2.v4,
+                cell.riverSurfaceY, neighbor.riverSurfaceY, 0.8,
+                cell.hasIncomingRiver && cell.incomingRiver === direction
+            );
         }
 
         if (cell.getEdgeType(direction) === HexEdgeType.Slope) {
@@ -1168,16 +1267,43 @@ class HexGridChunk {
         this.triangulateEdgeStrip(e2, c2, end, endCell.color);
     }
 
-    triangulateRiverQuad(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3, v4: BABYLON.Vector3, y: number): void {
+    triangulateRiverQuad(
+        v1: BABYLON.Vector3, 
+        v2: BABYLON.Vector3, 
+        v3: BABYLON.Vector3, 
+        v4: BABYLON.Vector3, 
+        y: number,
+        v: number,
+        reversed: boolean
+    ): void {
+        this.triangulateRiverQuadWithDiff(v1, v2, v3, v4, y, y, v, reversed);
+    }
+
+    triangulateRiverQuadWithDiff(
+        v1: BABYLON.Vector3, 
+        v2: BABYLON.Vector3, 
+        v3: BABYLON.Vector3, 
+        v4: BABYLON.Vector3, 
+        y1: number,
+        y2: number,
+        v: number,
+        reversed: boolean
+    ): void {
         v1 = v1.clone();
         v2 = v2.clone();
         v3 = v3.clone();
         v4 = v4.clone();
 
-        v1.y = v2.y = v3.y = v4.y = y;
+        v1.y = v2.y = y1;
+        v3.y = v4.y = y2;
 
         this.rivers.addQuad(v1, v2, v3, v4);
-        this.rivers.addQuadUVMinMax(0, 1, 0, 1);
+        if (reversed) {
+            this.rivers.addQuadUVMinMax(1, 0, v, v + 0.2);
+        } 
+        else {
+            this.rivers.addQuadUVMinMax(0, 1, 0.8 - v, 0.6 - v);
+        }
     }
 
     refresh(): void {
