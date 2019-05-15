@@ -24,6 +24,7 @@ class HexMetrics {
     public static chunkSizeZ = 5;
     public static streamBedElevationOffset = -1.75;
     public static riverSurfaceElevationOffset = -0.5;
+    public static waterFlowAnimationSpeedCoefficient = 180.0;
 
     private static corners: Array<BABYLON.Vector3> = [
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
@@ -355,7 +356,8 @@ class Prefabs {
                 './assets/gfx/material/noise.png',
                 scene,
                 true,
-                false
+                false,
+                BABYLON.Texture.BILINEAR_SAMPLINGMODE
             );
             Prefabs._riverMaterial.albedoTexture.hasAlpha = true;
 
@@ -364,7 +366,11 @@ class Prefabs {
             Prefabs._riverMaterial.onBindObservable.add(() => {
                 if (Prefabs._riverMaterial && Prefabs._riverMaterial.getEffect && Prefabs._riverMaterial.getEffect()) {
                     t++;
-                    Prefabs._riverMaterial.getEffect().setVector3("time", new BABYLON.Vector3(1.0, (t % 512)/100, 1.0));
+                    
+                    Prefabs._riverMaterial.getEffect().setVector3(
+                        "time", 
+                        new BABYLON.Vector3(1.0, t/HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0)
+                    );
                 }
             });
             

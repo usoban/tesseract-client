@@ -69,6 +69,7 @@ HexMetrics.chunkSizeX = 5;
 HexMetrics.chunkSizeZ = 5;
 HexMetrics.streamBedElevationOffset = -1.75;
 HexMetrics.riverSurfaceElevationOffset = -0.5;
+HexMetrics.waterFlowAnimationSpeedCoefficient = 180.0;
 HexMetrics.corners = [
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
     new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
@@ -267,14 +268,14 @@ class Prefabs {
             Prefabs._riverMaterial.alpha = 0.9;
             Prefabs._riverMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
             Prefabs._riverMaterial.transparencyMode = 2;
-            Prefabs._riverMaterial.albedoTexture = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false);
+            Prefabs._riverMaterial.albedoTexture = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
             Prefabs._riverMaterial.albedoTexture.hasAlpha = true;
             let t = 0;
             Prefabs._riverMaterial.AddUniform("time", "vec3", null);
             Prefabs._riverMaterial.onBindObservable.add(() => {
                 if (Prefabs._riverMaterial && Prefabs._riverMaterial.getEffect && Prefabs._riverMaterial.getEffect()) {
                     t++;
-                    Prefabs._riverMaterial.getEffect().setVector3("time", new BABYLON.Vector3(1.0, (t % 512) / 100, 1.0));
+                    Prefabs._riverMaterial.getEffect().setVector3("time", new BABYLON.Vector3(1.0, t / HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0));
                 }
             });
             Prefabs._riverMaterial.Fragment_Custom_Albedo(`
