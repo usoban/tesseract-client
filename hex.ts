@@ -110,6 +110,20 @@ class HexMetrics {
             position.z + (sample.z * 2.0 - 1.0) * HexMetrics.cellPerturbStrength
         );
     }
+
+    public static getRoadInterpolators(direction: HexDirection, cell: HexCell): BABYLON.Vector2 {
+        let interpolators = new BABYLON.Vector2();
+
+        if (cell.hasRoadThroughEdge(direction)) {
+            interpolators.x = interpolators.y = 0.5;
+        }
+        else {
+            interpolators.x = cell.hasRoadThroughEdge(HexDirection.previous(direction)) ? 0.5 : 0.25;
+            interpolators.y = cell.hasRoadThroughEdge(HexDirection.next(direction)) ? 0.5 : 0.25;
+        }
+
+        return interpolators;
+    }
 }
 
 class Texture {
@@ -281,15 +295,18 @@ class HexCoordinates {
 
 class HexCellColor {
 
-    public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#548af8ff");
-    public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#fffc1fff");
-    public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#20e43fff");
+    public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
+    public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
+    public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
+    public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
+    public static PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
 
     private static colors: Array<BABYLON.Color4> = [
         BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
         HexCellColor.PASTEL_YELLOW,
         HexCellColor.PASTEL_BLUE,
-        HexCellColor.PASTEL_GREEN
+        HexCellColor.PASTEL_GREEN,
+        HexCellColor.PASTEL_ORANGE
     ];
 
     public static default() {
@@ -316,25 +333,25 @@ class HexCellColor {
 }
 
 class Prefabs {
-    private static _terrainMaterial: BABYLON.StandardMaterial;
+    private static _terrainMaterial: BABYLON.PBRMaterial;
     private static _riverMaterial: BABYLON.PBRCustomMaterial;
+    private static _roadMaterial: BABYLON.PBRCustomMaterial;
 
     private static terrainMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._terrainMaterial) {
-            Prefabs._terrainMaterial = new BABYLON.StandardMaterial("terrain_material", scene);
-            Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
-            Prefabs._terrainMaterial.diffuseColor = BABYLON.Color3.White();
+            // Prefabs._terrainMaterial = new BABYLON.StandardMaterial("terrain_material", scene);
+            // Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            // Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
+            // Prefabs._terrainMaterial.diffuseColor = BABYLON.Color3.White();
             // mat.specularColor = BABYLON.Color3.Black();
             // mat.wireframe = true;    
         
             // TODO?: PBR.
-            // let mat = new BABYLON.PBRMaterial("pbr_mat", scene);
-            // mat.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            // mat.emissiveColor = BABYLON.Color3.Black();
-            // mat.albedoColor = BABYLON.Color3.White();
-            // mat.metallic = 0;
-            // mat.twoSidedLighting = true;
+            Prefabs._terrainMaterial = new BABYLON.PBRMaterial("pbr_mat", scene);
+            Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._terrainMaterial.albedoColor = BABYLON.Color3.White();
+            Prefabs._terrainMaterial.metallic = 0;
         }
 
         return Prefabs._terrainMaterial;
@@ -366,7 +383,7 @@ class Prefabs {
             Prefabs._riverMaterial.onBindObservable.add(() => {
                 if (Prefabs._riverMaterial && Prefabs._riverMaterial.getEffect && Prefabs._riverMaterial.getEffect()) {
                     t++;
-                    
+
                     Prefabs._riverMaterial.getEffect().setVector3(
                         "time", 
                         new BABYLON.Vector3(1.0, t/HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0)
@@ -396,6 +413,46 @@ class Prefabs {
         return Prefabs._riverMaterial;
     }
 
+    private static roadMaterial(scene: BABYLON.Scene) {
+        if (!Prefabs._roadMaterial) {
+            Prefabs._roadMaterial = new BABYLON.PBRCustomMaterial("road_material", scene);
+            Prefabs._roadMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._roadMaterial.emissiveColor = BABYLON.Color3.FromHexString("#000000");
+            Prefabs._roadMaterial.albedoColor = BABYLON.Color3.FromHexString("#CC302F");
+            Prefabs._roadMaterial.metallic = 0;
+            Prefabs._roadMaterial.roughness = 0.5;
+            Prefabs._roadMaterial.needDepthPrePass = true;
+            
+            Prefabs._roadMaterial.alpha = 0.9;
+            Prefabs._roadMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+            Prefabs._roadMaterial.transparencyMode = 2; 
+            Prefabs._roadMaterial.zOffset = -1.0;
+
+            Prefabs._roadMaterial.albedoTexture = new BABYLON.Texture(
+                './assets/gfx/material/noise.png',
+                scene,
+                true,
+                false,
+                BABYLON.Texture.BILINEAR_SAMPLINGMODE
+            );
+            Prefabs._roadMaterial.albedoTexture.hasAlpha = true;
+
+            Prefabs._roadMaterial.Fragment_Custom_Albedo(`
+                vec4 noise = texture2D(albedoSampler, vPositionW.xz * 0.025);
+                vec4 c = vAlbedoColor * (noise.y * 0.75 + 0.25);
+                float blend = vAlbedoUV.x;
+
+                blend *= noise.x + 0.5;
+                blend = smoothstep(0.4, 0.7, blend);
+
+                surfaceAlbedo = c.rgb;
+                alpha = blend;
+            `);
+        }
+        
+        return Prefabs._roadMaterial;
+    }
+
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
 
@@ -419,6 +476,20 @@ class Prefabs {
 
         return rivers;
     }
+
+    public static roads(name: string, scene: BABYLON.Scene): HexMesh {
+        let roads = new HexMesh(name, Prefabs.roadMaterial(scene), scene);
+
+        roads.isVisible = true;
+        roads.isPickable = false;
+        roads._useColors = false;
+        roads._useCollider = false;
+        roads._useUVCoordinates = true;
+        // roads.renderingGroupId = 3;
+        // roads.visibility = 0.9999;
+
+        return roads;
+    }
 }
 
 /**
@@ -438,7 +509,7 @@ class HexCell extends BABYLON.Mesh {
     private _hasOutgoingRiver: boolean;
     private _incomingRiver: HexDirection;
     private _outgoingRiver: HexDirection;
-    private _streamBedY: number;
+    private roads: boolean[] = new Array<boolean>(6);
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -482,6 +553,12 @@ class HexCell extends BABYLON.Mesh {
         }
         if (this._hasIncomingRiver && elevation > this.getNeighbor(this._incomingRiver).elevation) {
             this.removeIncomingRiver();
+        }
+
+        for (let i = 0; i < this.roads.length; i++) {
+            if (this.roads[i] && this.getElevationDifference(i) > 0) {
+                this.setRoad(i, false);
+            }
         }
 
         this.refreshPosition();
@@ -565,12 +642,12 @@ class HexCell extends BABYLON.Mesh {
 
         this._hasOutgoingRiver = true;
         this._outgoingRiver = direction;
-        this.refreshSelfOnly();
 
         neighbor.removeIncomingRiver();
         neighbor._hasIncomingRiver = true;
         neighbor._incomingRiver = HexDirection.opposite(direction);
-        neighbor.refreshSelfOnly();
+
+        this.setRoad(direction, false);
     }
 
     public removeOutgoigRiver(): void {
@@ -608,10 +685,43 @@ class HexCell extends BABYLON.Mesh {
         return (this._elevation + HexMetrics.streamBedElevationOffset) * HexMetrics.elevationStep;
     }
 
-    // Sets mesh render position from cellPosition (renders it slightly above).
-    private refreshPosition(): void {
-        this.position = this._cellPosition.clone();
-        this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+    public hasRoadThroughEdge(direction: HexDirection): boolean {
+        return this.roads[direction];
+    }
+
+    get hasRoads(): boolean {
+        for (let i = 0; i < this.roads.length; i++) {
+            if (this.roads[i]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public removeRoads(): void {
+        for (let i = 0; i < this.neighbors.length; i++) {
+            if (this.roads[i]) {
+                this.setRoad(i, false);
+            }
+        }
+    }
+
+    public addRoad(direction: HexDirection): void {
+        if (
+            !this.roads[direction] && 
+            !this.hasRiverThroughEdge(direction) &&
+            this.getElevationDifference(direction) <= 1
+        ) {
+            this.setRoad(direction, true);
+        }
+    }
+
+    public setRoad(index: number, state: boolean): void {
+        this.roads[index] = state;
+        this.neighbors[index].roads[HexDirection.opposite(index)] = state;
+        this.neighbors[index].refreshSelfOnly();
+        this.refreshSelfOnly();
     }
 
     public getEdgeType(direction: HexDirection): HexEdgeType {
@@ -620,6 +730,21 @@ class HexCell extends BABYLON.Mesh {
 
     public getEdgeTypeForCell(cell: HexCell): HexEdgeType {
         return HexMetrics.getEdgeType(this.elevation, cell.elevation);
+    }
+
+    public getElevationDifference(direction: HexDirection): number {
+        let difference = this.elevation - this.getNeighbor(direction).elevation;
+        return difference >= 0 ? difference : -difference;
+    }
+
+    get riverBeginOrEndDirection(): HexDirection {
+        return this.hasIncomingRiver ? this.incomingRiver : this.outgoingRiver;
+    }
+
+    // Sets mesh render position from cellPosition (renders it slightly above).
+    private refreshPosition(): void {
+        this.position = this._cellPosition.clone();
+        this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
     }
 
     private refresh(): void {
@@ -850,10 +975,12 @@ class HexGridChunk {
     private cells: HexCell[];
     private terrain: HexMesh;
     private rivers: HexMesh;
+    private roads: HexMesh;
 
-    constructor(terrainMesh: HexMesh, riversMesh: HexMesh) {
+    constructor(terrainMesh: HexMesh, riversMesh: HexMesh, roadsMesh: HexMesh) {
         this.terrain = terrainMesh;
         this.rivers = riversMesh;
+        this.roads = roadsMesh;
         this.cells = new Array<HexCell>(HexMetrics.chunkSizeX * HexMetrics.chunkSizeZ);
     }
 
@@ -865,6 +992,7 @@ class HexGridChunk {
     triangulate(): void {
         this.terrain.clear();
         this.rivers.clear();
+        this.roads.clear();
 
         for (let i = 0; i < this.cells.length; i++) {
             for (let direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
@@ -874,6 +1002,7 @@ class HexGridChunk {
 
         this.terrain.apply();
         this.rivers.apply();
+        this.roads.apply();
     }
 
     triangulateCell(direction: HexDirection, cell: HexCell): void {
@@ -899,11 +1028,27 @@ class HexGridChunk {
             }
         } 
         else {
-            this.triangulateEdgeFan(center, e, cell.color);
+            this.triangulateCellWithoutRiver(direction, cell, center, e);
         }
 
         if (direction <= HexDirection.SE) {
             this.triangulateCellConnection(direction, cell, e);
+        }
+    }
+
+    triangulateCellWithoutRiver(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
+        this.triangulateEdgeFan(center, e, cell.color);
+
+        if (cell.hasRoads) {
+            let interpolators = HexMetrics.getRoadInterpolators(direction, cell);
+
+            this.triangulateRoad(
+                center,
+                BABYLON.Vector3.Lerp(center, e.v1, interpolators.x),
+                BABYLON.Vector3.Lerp(center, e.v5, interpolators.y),
+                e,
+                cell.hasRoadThroughEdge(direction)
+            );
         }
     }
 
@@ -1004,6 +1149,10 @@ class HexGridChunk {
     }
 
     triangulateAdjecentToRiver(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
+        if (cell.hasRoads) {
+            this.triangulateRoadAdjectedToRiver(direction, cell, center, e);
+        }
+
         if (cell.hasRiverThroughEdge(HexDirection.next(direction))) {
             if (cell.hasRiverThroughEdge(HexDirection.previous(direction))) {
                 center = center.add(HexMetrics.getSolidEdgeMiddle(direction).scale(0.5 * HexMetrics.innerToOuter));
@@ -1028,6 +1177,130 @@ class HexGridChunk {
         this.triangulateEdgeFan(center, m, cell.color);
     }
 
+    triangulateRoadAdjectedToRiver(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
+        let
+            hasRoadThroughEdge = cell.hasRoadThroughEdge(direction),
+            previousHasRiver = cell.hasRiverThroughEdge(HexDirection.previous(direction)),
+            nextHasRiver = cell.hasRiverThroughEdge(HexDirection.next(direction)),
+            interpolators = HexMetrics.getRoadInterpolators(direction, cell),
+            roadCenter = center.clone();
+
+        if (cell.hasRiverBeginingOrEnd) {
+            let oppositeDir = HexDirection.opposite(cell.riverBeginOrEndDirection);
+
+            roadCenter = roadCenter.add(HexMetrics.getSolidEdgeMiddle(oppositeDir).scale(1/3));
+        }
+        else if (cell.incomingRiver === HexDirection.opposite(cell.outgoingRiver)) {
+            let corner: BABYLON.Vector3;
+
+            if (previousHasRiver) {
+                if (!hasRoadThroughEdge && !cell.hasRoadThroughEdge(HexDirection.next(direction))) {
+                    return;
+                }
+
+                corner = HexMetrics.getSecondSolidCorner(direction);
+            }
+            else {
+                if (!hasRoadThroughEdge && !cell.hasRoadThroughEdge(HexDirection.previous(direction))) {
+                    return;
+                }
+
+                corner = HexMetrics.getFirstSolidCorner(direction);
+            }
+
+            roadCenter = roadCenter.add(corner.scale(0.5));
+            center = center.add(corner.scale(0.25));
+        }
+        else if (cell.incomingRiver === HexDirection.previous(cell.outgoingRiver)) {
+            roadCenter = roadCenter.subtract(HexMetrics.getSecondCorner(cell.incomingRiver).scale(0.2));
+        }
+        else if (cell.incomingRiver === HexDirection.next(cell.outgoingRiver)) {
+            roadCenter = roadCenter.subtract(HexMetrics.getFirstCorner(cell.incomingRiver).scale(0.2));
+        }
+        else if (previousHasRiver && nextHasRiver) {
+            if (!hasRoadThroughEdge) {
+                return;
+            }
+
+            let offset = HexMetrics.getSolidEdgeMiddle(direction).scale(HexMetrics.innerToOuter);
+
+            roadCenter = roadCenter.add(offset.scale(0.7));
+            center = center.add(offset.scale(0.5));
+        }
+        else {
+            let middle: HexDirection;
+
+            if (previousHasRiver) {
+                middle = HexDirection.next(direction);
+            }
+            else if (nextHasRiver) {
+                middle = HexDirection.previous(direction);
+            }
+            else {
+                middle = direction;
+            }
+
+            if (
+                !cell.hasRoadThroughEdge(middle) &&
+                !cell.hasRoadThroughEdge(HexDirection.previous(middle)) &&
+                !cell.hasRoadThroughEdge(HexDirection.next(middle))
+            ) {
+                return;
+            }
+
+            roadCenter = roadCenter.add(HexMetrics.getSolidEdgeMiddle(middle).scale(0.25));
+        }
+
+        let
+            mL = BABYLON.Vector3.Lerp(roadCenter, e.v1, interpolators.x),
+            mR = BABYLON.Vector3.Lerp(roadCenter, e.v5, interpolators.y);
+
+        this.triangulateRoad(roadCenter, mL, mR, e, hasRoadThroughEdge);
+
+        if (previousHasRiver) {
+            this.triangulateRoadEdge(roadCenter, center, mL);
+        }
+        if (nextHasRiver) {
+            this.triangulateRoadEdge(roadCenter, mR, center);
+        }
+    }
+
+    triangulateRoad(
+        center: BABYLON.Vector3, mL: BABYLON.Vector3,
+        mR: BABYLON.Vector3, e: EdgeVertices,
+        hasRoadThroughCellEdge: boolean
+    ): void {
+        if (hasRoadThroughCellEdge) {
+            let mC = BABYLON.Vector3.Lerp(mL, mR, 0.5);
+
+            this.triangulateRoadSegment(mL, mC, mR, e.v2, e.v3, e.v4);
+            this.roads.addTriangle(center, mL, mC);
+            this.roads.addTriangle(center, mC, mR);
+            this.roads.addTriangleUV(
+                new BABYLON.Vector2(1, 0), 
+                new BABYLON.Vector2(0, 0), 
+                new BABYLON.Vector2(1, 0)
+            );
+            this.roads.addTriangleUV(
+                new BABYLON.Vector2(1, 0), 
+                new BABYLON.Vector2(1, 0), 
+                new BABYLON.Vector2(0, 0)
+            );
+        }
+        else {
+            this.triangulateRoadEdge(center, mL, mR);
+        }
+    } 
+
+    triangulateRoadEdge(center: BABYLON.Vector3, mL: BABYLON.Vector3, mR: BABYLON.Vector3): void {
+        this.roads.addTriangle(center, mL, mR);
+        this.roads.addTriangleUV(
+            new BABYLON.Vector2(1, 0),
+            new BABYLON.Vector2(0, 0),
+            new BABYLON.Vector2(0, 0)
+        );
+    }
+
     triangulateEdgeFan(center: BABYLON.Vector3, edge: EdgeVertices, color: BABYLON.Color4): void {
         this.terrain.addTriangle(center, edge.v1, edge.v2);
         this.terrain.addTriangleColor1(color);
@@ -1039,7 +1312,11 @@ class HexGridChunk {
         this.terrain.addTriangleColor1(color);
     }
 
-    triangulateEdgeStrip(e1: EdgeVertices, c1: BABYLON.Color4, e2: EdgeVertices, c2: BABYLON.Color4): void {
+    triangulateEdgeStrip(
+        e1: EdgeVertices, c1: BABYLON.Color4, 
+        e2: EdgeVertices, c2: BABYLON.Color4,
+        hasRoad: boolean = false
+    ): void {
         this.terrain.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
         this.terrain.addQuadColor2(c1, c2);
         this.terrain.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
@@ -1048,6 +1325,10 @@ class HexGridChunk {
         this.terrain.addQuadColor2(c1, c2);
         this.terrain.addQuad(e1.v4, e1.v5, e2.v4, e2.v5);
         this.terrain.addQuadColor2(c1, c2);
+
+        if (hasRoad) {
+            this.triangulateRoadSegment(e1.v2, e1.v3, e1.v4, e2.v2, e2.v3, e2.v4);
+        }
     }
 
     triangulateCellConnection(direction: HexDirection, cell: HexCell, e1: EdgeVertices): void {
@@ -1072,9 +1353,9 @@ class HexGridChunk {
         }
 
         if (cell.getEdgeType(direction) === HexEdgeType.Slope) {
-            this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor);
+            this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor, cell.hasRoadThroughEdge(direction));
         } else {
-            this.triangulateEdgeStrip(e1, cell.color, e2, neighbor.color);
+            this.triangulateEdgeStrip(e1, cell.color, e2, neighbor.color, cell.hasRoadThroughEdge(direction));
         }
 
         let 
@@ -1252,12 +1533,16 @@ class HexGridChunk {
         this.terrain.addTriangleColor(c2, leftCell.color, boundryColor);
     }
 
-    triangulateCellEdgeTerraces(begin: EdgeVertices, beginCell: HexCell, end: EdgeVertices, endCell: HexCell): void {
+    triangulateCellEdgeTerraces(
+        begin: EdgeVertices, beginCell: HexCell, 
+        end: EdgeVertices, endCell: HexCell,
+        hasRoad: boolean
+    ): void {
         let
             e2 = EdgeVertices.terraceLerp(begin, end, 1),
             c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, 1);
 
-        this.triangulateEdgeStrip(begin, beginCell.color, e2, c2);
+        this.triangulateEdgeStrip(begin, beginCell.color, e2, c2, hasRoad);
 
         let e1: EdgeVertices, c1: BABYLON.Color4;
             
@@ -1267,10 +1552,20 @@ class HexGridChunk {
             e2 = EdgeVertices.terraceLerp(begin, end, i);
             c2 = HexMetrics.terraceColorLerp(beginCell.color, endCell.color, i);
 
-            this.triangulateEdgeStrip(e1, c1, e2, c2);
+            this.triangulateEdgeStrip(e1, c1, e2, c2, hasRoad);
         }
 
-        this.triangulateEdgeStrip(e2, c2, end, endCell.color);
+        this.triangulateEdgeStrip(e2, c2, end, endCell.color, hasRoad);
+    }
+
+    triangulateRoadSegment(
+        v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3,
+        v4: BABYLON.Vector3, v5: BABYLON.Vector3, v6: BABYLON.Vector3
+    ): void {
+        this.roads.addQuad(v1, v2, v4, v5);
+        this.roads.addQuad(v2, v3, v5, v6);
+        this.roads.addQuadUVMinMax(0, 1, 0, 0);
+        this.roads.addQuadUVMinMax(1, 0, 0, 0);
     }
 
     triangulateRiverQuad(
@@ -1438,7 +1733,8 @@ class HexGrid {
             for (let x = 0; x < this.chunkCountX; x++) {
                 this.chunks[i] = new HexGridChunk(
                     Prefabs.terrain(`hex_terrain_${x}_${z}`, this._scene),
-                    Prefabs.rivers(`hex_rivers_${x}_${z}`, this._scene)
+                    Prefabs.rivers(`hex_rivers_${x}_${z}`, this._scene),
+                    Prefabs.roads(`hex_roads_${x}_${z}`, this._scene)
                 );
 
                 i++;
@@ -1561,9 +1857,11 @@ class HexMapEditor {
 
     private static COLORS = [
         {label: "--", color: null},
+        {label: "White", color: HexCellColor.WHITE},
         {label: "Blue", color: HexCellColor.PASTEL_BLUE},
         {label: "Yellow", color: HexCellColor.PASTEL_YELLOW},
-        {label: "Green", color: HexCellColor.PASTEL_GREEN}
+        {label: "Green", color: HexCellColor.PASTEL_GREEN},
+        {label: "Orange", color: HexCellColor.PASTEL_ORANGE}
     ];
 
     private grid: HexGrid;
@@ -1576,6 +1874,7 @@ class HexMapEditor {
     private isElevationSelected: boolean = true;
     private brushSize: number = 0;
     private riverMode: OptionalToggle;
+    private roadMode: OptionalToggle;
 
     private isPointerDown: boolean = false;
     private isDrag: boolean = false;
@@ -1597,7 +1896,7 @@ class HexMapEditor {
         // this.advancedTexture.addControl(this.scrollViewer);
 
         this.selectionPanel.width = 0.15;
-        this.selectionPanel.height = 0.6;
+        this.selectionPanel.height = 0.9;
         this.selectionPanel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
         this.selectionPanel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
         this.selectionPanel.background = "#336699";
@@ -1614,6 +1913,7 @@ class HexMapEditor {
             colorGroup = new BABYLON.GUI.RadioGroup("Color"),
             elevationGroup = new BABYLON.GUI.CheckboxGroup("Elevation"),
             riverGroup = new BABYLON.GUI.RadioGroup("River"),
+            roadGroup = new BABYLON.GUI.RadioGroup("Road"),
             slidersGroup = new BABYLON.GUI.SliderGroup("Values");
 
         // Colors.
@@ -1629,12 +1929,18 @@ class HexMapEditor {
         riverGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRiverMode.bind(this), this.riverMode  === OptionalToggle.Yes);
         riverGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRiverMode.bind(this), this.riverMode  === OptionalToggle.No);
 
+        // Road
+        roadGroup.addRadio(OptionalToggle[OptionalToggle.Ignore], this.setRoadMode.bind(this), this.roadMode  === OptionalToggle.Ignore);
+        roadGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRoadMode.bind(this), this.roadMode  === OptionalToggle.Yes);
+        roadGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRoadMode.bind(this), this.roadMode  === OptionalToggle.No);
+
         // Tool sliders.
         slidersGroup.addSlider("Elevation", this.setElevation.bind(this), "unit", 0, 7, this.activeElevation, (v) => Math.floor(v));
         slidersGroup.addSlider("Brush size", this.setBrushSize.bind(this), "cell", 0, 4, this.brushSize, (v) => ~~v);
         
         this.selectionPanel.addGroup(colorGroup);
         this.selectionPanel.addGroup(riverGroup);
+        this.selectionPanel.addGroup(roadGroup);
         this.selectionPanel.addGroup(elevationGroup);
         this.selectionPanel.addGroup(slidersGroup);
     }
@@ -1724,11 +2030,21 @@ class HexMapEditor {
         if (this.riverMode === OptionalToggle.No) {
             cell.removeRiver();
         }
-        else if (this.isDrag && this.riverMode === OptionalToggle.Yes) {
+
+        if (this.roadMode === OptionalToggle.No) {
+            cell.removeRoads();
+        }
+
+        if (this.isDrag) {
             let otherCell = cell.getNeighbor(HexDirection.opposite(this.dragDirection));
-            
+
             if (otherCell) {
-                otherCell.setOutgoingRiver(this.dragDirection);
+                if (this.riverMode === OptionalToggle.Yes) {
+                    otherCell.setOutgoingRiver(this.dragDirection);
+                }
+                if (this.roadMode === OptionalToggle.Yes) {
+                    otherCell.addRoad(this.dragDirection);
+                }
             }
         }
     }
@@ -1772,5 +2088,9 @@ class HexMapEditor {
 
     setRiverMode(mode: OptionalToggle): void {
         this.riverMode = mode;
+    }
+
+    setRoadMode(mode: OptionalToggle): void {
+        this.roadMode = mode;
     }
 }
