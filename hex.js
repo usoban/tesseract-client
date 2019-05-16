@@ -79,7 +79,7 @@ HexMetrics.elevationPerturbStrength = 1.5;
 HexMetrics.chunkSizeX = 5;
 HexMetrics.chunkSizeZ = 5;
 HexMetrics.streamBedElevationOffset = -1.75;
-HexMetrics.riverSurfaceElevationOffset = -0.5;
+HexMetrics.waterElevationOffset = -0.5;
 HexMetrics.waterFlowAnimationSpeedCoefficient = 180.0;
 HexMetrics.corners = [
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
@@ -255,13 +255,6 @@ HexCellColor.colors = [
 class Prefabs {
     static terrainMaterial(scene) {
         if (!Prefabs._terrainMaterial) {
-            // Prefabs._terrainMaterial = new BABYLON.StandardMaterial("terrain_material", scene);
-            // Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            // Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
-            // Prefabs._terrainMaterial.diffuseColor = BABYLON.Color3.White();
-            // mat.specularColor = BABYLON.Color3.Black();
-            // mat.wireframe = true;    
-            // TODO?: PBR.
             Prefabs._terrainMaterial = new BABYLON.PBRMaterial("pbr_mat", scene);
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
             Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
@@ -340,6 +333,97 @@ class Prefabs {
         }
         return Prefabs._roadMaterial;
     }
+    static waterMaterial(scene) {
+        if (!Prefabs._waterMaterial) {
+            Prefabs._waterMaterial = new BABYLON.PBRCustomMaterial("water_material", scene);
+            Prefabs._waterMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._waterMaterial.emissiveColor = BABYLON.Color3.FromHexString("#ffffff");
+            Prefabs._waterMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
+            Prefabs._waterMaterial.metallic = 0;
+            Prefabs._waterMaterial.roughness = 0.5;
+            Prefabs._waterMaterial.alpha = 0.9;
+            Prefabs._waterMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+            Prefabs._waterMaterial.transparencyMode = 2;
+            Prefabs._waterMaterial.albedoTexture = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+            Prefabs._waterMaterial.albedoTexture.hasAlpha = true;
+            let t = 0;
+            Prefabs._waterMaterial.AddUniform("vTime", "vec3", null);
+            Prefabs._waterMaterial.onBindObservable.add(() => {
+                if (Prefabs._waterMaterial && Prefabs._waterMaterial.getEffect && Prefabs._waterMaterial.getEffect()) {
+                    t++;
+                    Prefabs._waterMaterial.getEffect().setVector3("vTime", new BABYLON.Vector3(0.0, t / 180.0, 0.0));
+                }
+            });
+            Prefabs._waterMaterial.Fragment_Definitions(Prefabs._wavesShaderFn);
+            Prefabs._waterMaterial.Fragment_Custom_Albedo(`
+                // vec2 wUV1 = vPositionW.xz;
+                // wUV1.y += vTime.y;
+                // vec4 noise1 = texture2D(albedoSampler, wUV1 * 0.025);
+
+                // vec2 wUV2 = vPositionW.xz;
+                // wUV2.x += vTime.y;
+                // vec4 noise2 = texture2D(albedoSampler, wUV2 * 0.025);
+
+                // vec4 _color = vec4(vEmissiveColor, 0.0);
+
+                // float blendWave = sin((vPositionW.x + vPositionW.z) * 0.1 + (noise1.y + noise2.z) + vTime.y);
+                // blendWave *= blendWave;
+
+                // float waves = mix(noise1.z, noise1.w, blendWave) + mix(noise2.x, noise2.y, blendWave);
+                // waves = smoothstep(0.75, 2.0, waves);
+
+                vec4 _color = vec4(vEmissiveColor, 0.0);
+                float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
+                vec4 c = clamp(_color + waves, 0.0, 1.0);
+
+                surfaceAlbedo.rgb = c.rgb;
+                alpha = c.a;
+            `);
+        }
+        return Prefabs._waterMaterial;
+    }
+    static waterShoreMaterial(scene) {
+        if (!Prefabs._waterShoreMaterial) {
+            Prefabs._waterShoreMaterial = new BABYLON.PBRCustomMaterial("water_shore_material", scene);
+            Prefabs._waterShoreMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._waterShoreMaterial.emissiveColor = BABYLON.Color3.FromHexString("#ffffff");
+            Prefabs._waterShoreMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
+            Prefabs._waterShoreMaterial.metallic = 0;
+            Prefabs._waterShoreMaterial.roughness = 0.5;
+            Prefabs._waterShoreMaterial.alpha = 0.9;
+            Prefabs._waterShoreMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+            Prefabs._waterShoreMaterial.transparencyMode = 2;
+            Prefabs._waterShoreMaterial.zOffset = -10.0;
+            Prefabs._waterShoreMaterial.albedoTexture = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+            Prefabs._waterShoreMaterial.albedoTexture.hasAlpha = true;
+            let t = 0;
+            Prefabs._waterShoreMaterial.AddUniform("vTime", "vec3", null);
+            Prefabs._waterShoreMaterial.onBindObservable.add(() => {
+                if (Prefabs._waterShoreMaterial && Prefabs._waterShoreMaterial.getEffect && Prefabs._waterShoreMaterial.getEffect()) {
+                    t++;
+                    Prefabs._waterShoreMaterial.getEffect().setVector3("vTime", new BABYLON.Vector3(0.0, t / 180.0, 0.0));
+                }
+            });
+            Prefabs._waterShoreMaterial.Fragment_Definitions(`
+                ${Prefabs._foamShaderFn}
+                
+                ${Prefabs._wavesShaderFn}
+            `);
+            Prefabs._waterShoreMaterial.Fragment_Custom_Albedo(`
+                vec4 _color = vec4(vEmissiveColor, 0.0);
+                float shore = vAlbedoUV.y;
+                float foam = Foam(shore, vPositionW.xz, albedoSampler, vTime.y);
+                float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
+                waves *= 1.0 - shore;
+
+                vec4 c = vec4(_color + max(foam, waves));
+
+                surfaceAlbedo.rgb = c.rgb;
+                alpha = c.a;
+            `);
+        }
+        return Prefabs._waterShoreMaterial;
+    }
     static terrain(name, scene) {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
@@ -366,10 +450,69 @@ class Prefabs {
         roads._useCollider = false;
         roads._useUVCoordinates = true;
         // roads.renderingGroupId = 3;
-        // roads.visibility = 0.9999;
         return roads;
     }
+    static water(name, scene) {
+        let water = new HexMesh(name, Prefabs.waterMaterial(scene), scene);
+        water.isVisible = true;
+        water.isPickable = false;
+        water._useColors = false;
+        water._useCollider = false;
+        water._useUVCoordinates = false;
+        return water;
+    }
+    static waterShore(name, scene) {
+        let waterShore = new HexMesh(name, Prefabs.waterShoreMaterial(scene), scene);
+        waterShore.isVisible = true;
+        waterShore.isPickable = false;
+        waterShore._useColors = false;
+        waterShore._useCollider = false;
+        waterShore._useUVCoordinates = true;
+        return waterShore;
+    }
 }
+Prefabs._foamShaderFn = `
+        float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
+            shore = sqrt(shore);
+
+            vec2 noiseUV = worldXZ + t * 0.25;
+            vec4 noise = texture2D(noiseTex, noiseUV * 0.015);
+
+            float distortion1 = noise.x * (1.0 - shore);
+            float foam1 = sin((shore + distortion1) * 10.0 - t);
+            foam1 *= foam1;
+
+            float distortion2 = noise.y * (1.0 - shore);
+            float foam2 = sin((shore + distortion2) * 10.0 + t + 2.0);
+            foam2 *= foam2 * 0.7;
+
+            return max(foam1, foam2) * shore;
+        }
+    `;
+Prefabs._wavesShaderFn = `
+        float Waves(vec2 worldXZ, sampler2D noiseTex, float t) {
+            vec2 uv1 = worldXZ;
+            uv1.y += t;
+            vec4 noise1 = texture2D(noiseTex, uv1 * 0.025);
+
+            vec2 uv2 = worldXZ;
+            uv2.x += t;
+            vec4 noise2 = texture2D(noiseTex, uv2 * 0.025);
+
+            float blendWave = sin(
+                (worldXZ.x + worldXZ.y) * 0.1 +
+                (noise1.y + noise2.z) + t
+            );
+
+            blendWave *= blendWave;
+
+            float waves = 
+                mix(noise1.z, noise1.w, blendWave) +
+                mix(noise2.x, noise2.y, blendWave);
+
+            return smoothstep(0.75, 2.0, waves);
+        }
+    `;
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!!
  */
@@ -456,7 +599,10 @@ class HexCell extends BABYLON.Mesh {
         return this._hasIncomingRiver != this._hasOutgoingRiver;
     }
     get riverSurfaceY() {
-        return ((this.elevation + HexMetrics.riverSurfaceElevationOffset) * HexMetrics.elevationStep);
+        return ((this.elevation + HexMetrics.waterElevationOffset) * HexMetrics.elevationStep);
+    }
+    get waterSurfaceY() {
+        return ((this.waterLevel + HexMetrics.waterElevationOffset) * HexMetrics.elevationStep);
     }
     hasRiverThroughEdge(direction) {
         return (this._hasIncomingRiver && this._incomingRiver === direction ||
@@ -539,6 +685,19 @@ class HexCell extends BABYLON.Mesh {
         this.neighbors[index].refreshSelfOnly();
         this.refreshSelfOnly();
     }
+    get waterLevel() {
+        return this._waterLevel;
+    }
+    set waterLevel(value) {
+        if (this._waterLevel === value) {
+            return;
+        }
+        this._waterLevel = value;
+        this.refresh();
+    }
+    get isUnderwater() {
+        return this.waterLevel > this.elevation;
+    }
     getEdgeType(direction) {
         return HexMetrics.getEdgeType(this.elevation, this.neighbors[direction].elevation);
     }
@@ -555,7 +714,7 @@ class HexCell extends BABYLON.Mesh {
     // Sets mesh render position from cellPosition (renders it slightly above).
     refreshPosition() {
         this.position = this._cellPosition.clone();
-        this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+        //this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
     }
     refresh() {
         if (!this.chunk)
@@ -731,10 +890,13 @@ class HexMesh extends BABYLON.Mesh {
 }
 HexMesh._material = null;
 class HexGridChunk {
-    constructor(terrainMesh, riversMesh, roadsMesh) {
-        this.terrain = terrainMesh;
-        this.rivers = riversMesh;
-        this.roads = roadsMesh;
+    constructor(name, scene) {
+        this._scene = scene;
+        this.terrain = Prefabs.terrain(`${name}_terrain`, scene);
+        this.rivers = Prefabs.rivers(`${name}_rivers`, scene);
+        this.roads = Prefabs.roads(`${name}_roads`, scene);
+        this.water = Prefabs.water(`${name}_water`, scene);
+        this.waterShore = Prefabs.waterShore(`${name}_water_shore`, scene);
         this.cells = new Array(HexMetrics.chunkSizeX * HexMetrics.chunkSizeZ);
     }
     addCell(index, cell) {
@@ -745,6 +907,8 @@ class HexGridChunk {
         this.terrain.clear();
         this.rivers.clear();
         this.roads.clear();
+        this.water.clear();
+        this.waterShore.clear();
         for (let i = 0; i < this.cells.length; i++) {
             for (let direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
                 this.triangulateCell(direction, this.cells[i]);
@@ -753,6 +917,8 @@ class HexGridChunk {
         this.terrain.apply();
         this.rivers.apply();
         this.roads.apply();
+        this.water.apply();
+        this.waterShore.apply();
     }
     triangulateCell(direction, cell) {
         let center = cell.cellPosition.clone(), e = EdgeVertices.fromCorners(center.add(HexMetrics.getFirstSolidCorner(direction)), center.add(HexMetrics.getSecondSolidCorner(direction)));
@@ -775,6 +941,57 @@ class HexGridChunk {
         }
         if (direction <= HexDirection.SE) {
             this.triangulateCellConnection(direction, cell, e);
+        }
+        if (cell.isUnderwater) {
+            this.triangulateWater(direction, cell, center);
+        }
+    }
+    triangulateWater(direction, cell, center) {
+        center = center.clone();
+        center.y = cell.waterSurfaceY;
+        let neighbor = cell.getNeighbor(direction);
+        if (neighbor != null && !neighbor.isUnderwater) {
+            this.triangulateWaterShore(direction, cell, neighbor, center);
+        }
+        else {
+            this.triangulateOpenWater(direction, cell, neighbor, center);
+        }
+    }
+    triangulateOpenWater(direction, cell, neighbor, center) {
+        let c1 = center.add(HexMetrics.getFirstSolidCorner(direction)), c2 = center.add(HexMetrics.getSecondSolidCorner(direction));
+        this.water.addTriangle(center, c1, c2);
+        if (direction <= HexDirection.SE && neighbor != null) {
+            let bridge = HexMetrics.getBridge(direction), e1 = c1.add(bridge), e2 = c2.add(bridge);
+            this.water.addQuad(c1, c2, e1, e2);
+            if (direction <= HexDirection.E) {
+                let nextNeighbor = cell.getNeighbor(HexDirection.next(direction));
+                if (nextNeighbor == null || !nextNeighbor.isUnderwater) {
+                    return;
+                }
+                this.water.addTriangle(c2, e2, c2.add(HexMetrics.getBridge(HexDirection.next(direction))));
+            }
+        }
+    }
+    triangulateWaterShore(direction, cell, neighbor, center) {
+        let e1;
+        e1 = EdgeVertices.fromCorners(center.add(HexMetrics.getFirstSolidCorner(direction)), center.add(HexMetrics.getSecondSolidCorner(direction)));
+        this.water.addTriangle(center, e1.v1, e1.v2);
+        this.water.addTriangle(center, e1.v2, e1.v3);
+        this.water.addTriangle(center, e1.v3, e1.v4);
+        this.water.addTriangle(center, e1.v4, e1.v5);
+        let bridge = HexMetrics.getBridge(direction), e2 = EdgeVertices.fromCorners(e1.v1.add(bridge), e1.v5.add(bridge));
+        this.waterShore.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
+        this.waterShore.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
+        this.waterShore.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
+        this.waterShore.addQuad(e1.v4, e1.v5, e2.v4, e2.v5);
+        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+        let nextNeighbor = cell.getNeighbor(HexDirection.next(direction));
+        if (nextNeighbor != null) {
+            this.waterShore.addTriangle(e1.v5, e2.v5, e1.v5.add(HexMetrics.getBridge(HexDirection.next(direction))));
+            this.waterShore.addTriangleUV(new BABYLON.Vector2(0, 0), new BABYLON.Vector2(0, 1), new BABYLON.Vector2(0, nextNeighbor.isUnderwater ? 0 : 1));
         }
     }
     triangulateCellWithoutRiver(direction, cell, center, e) {
@@ -1192,7 +1409,7 @@ class HexGrid {
         let i = 0;
         for (let z = 0; z < this.chunkCountZ; z++) {
             for (let x = 0; x < this.chunkCountX; x++) {
-                this.chunks[i] = new HexGridChunk(Prefabs.terrain(`hex_terrain_${x}_${z}`, this._scene), Prefabs.rivers(`hex_rivers_${x}_${z}`, this._scene), Prefabs.roads(`hex_roads_${x}_${z}`, this._scene));
+                this.chunks[i] = new HexGridChunk(`hex_${x}_${z}`, this._scene);
                 i++;
             }
         }
@@ -1214,11 +1431,12 @@ class HexGrid {
         cell.isVisible = true;
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
-        let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene), textTexture = this.makeCellText(cell.coordinates.toString());
-        material.diffuseTexture = textTexture;
-        material.opacityTexture = textTexture;
-        material.specularColor = BABYLON.Color3.Black();
-        cell.material = material;
+        // let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene),
+        //     textTexture = this.makeCellText(cell.coordinates.toString());
+        // material.diffuseTexture = textTexture;
+        // material.opacityTexture = textTexture;
+        // material.specularColor = BABYLON.Color3.Black();
+        // cell.material = material;
         if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
             let cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
             cell.color = cfg.color;
@@ -1297,8 +1515,12 @@ class HexMapEditor {
     constructor(grid) {
         this.activeColor = null;
         this.activeElevation = 0.0;
-        this.isElevationSelected = true;
+        this.activeWaterLevel = 0.0;
+        this.isElevationSelected = false;
+        this.isWaterLevelSelected = false;
         this.brushSize = 0;
+        this.riverMode = OptionalToggle.Ignore;
+        this.roadMode = OptionalToggle.Ignore;
         this.isPointerDown = false;
         this.isDrag = false;
         this.grid = grid;
@@ -1324,10 +1546,11 @@ class HexMapEditor {
         const colorGroup = new BABYLON.GUI.RadioGroup("Color"), elevationGroup = new BABYLON.GUI.CheckboxGroup("Elevation"), riverGroup = new BABYLON.GUI.RadioGroup("River"), roadGroup = new BABYLON.GUI.RadioGroup("Road"), slidersGroup = new BABYLON.GUI.SliderGroup("Values");
         // Colors.
         HexMapEditor.COLORS.forEach(colorOption => {
-            colorGroup.addRadio(colorOption.label, this.setActiveColor.bind(this));
+            colorGroup.addRadio(colorOption.label, this.setActiveColor.bind(this), this.activeColor === colorOption.color);
         });
         // Elevation check.
         elevationGroup.addCheckbox("Elevation", this.toggleElevation.bind(this), this.isElevationSelected);
+        elevationGroup.addCheckbox("Water Level", this.toggleWaterLevel.bind(this), this.isWaterLevelSelected);
         // River
         riverGroup.addRadio(OptionalToggle[OptionalToggle.Ignore], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.Ignore);
         riverGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.Yes);
@@ -1338,6 +1561,7 @@ class HexMapEditor {
         roadGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRoadMode.bind(this), this.roadMode === OptionalToggle.No);
         // Tool sliders.
         slidersGroup.addSlider("Elevation", this.setElevation.bind(this), "unit", 0, 7, this.activeElevation, (v) => Math.floor(v));
+        slidersGroup.addSlider("Water Level", this.setWaterLevel.bind(this), "unit", 0, 7, this.activeWaterLevel, (v) => Math.floor(v));
         slidersGroup.addSlider("Brush size", this.setBrushSize.bind(this), "cell", 0, 4, this.brushSize, (v) => ~~v);
         this.selectionPanel.addGroup(colorGroup);
         this.selectionPanel.addGroup(riverGroup);
@@ -1405,11 +1629,17 @@ class HexMapEditor {
         if (!cell) {
             return;
         }
+        // console.log(cell.chunk.rivers.parent);
+        // console.log(cell.chunk.water.absolutePosition);
+        // console.log(cell.chunk.terrain.absolutePosition);
         if (this.activeColor !== null) {
             cell.color = this.activeColor;
         }
         if (this.isElevationSelected) {
             cell.elevation = this.activeElevation;
+        }
+        if (this.isWaterLevelSelected) {
+            cell.waterLevel = this.activeWaterLevel;
         }
         if (this.riverMode === OptionalToggle.No) {
             cell.removeRiver();
@@ -1455,6 +1685,12 @@ class HexMapEditor {
     }
     toggleElevation(state) {
         this.isElevationSelected = state;
+    }
+    setWaterLevel(level) {
+        this.activeWaterLevel = Math.floor(level);
+    }
+    toggleWaterLevel(state) {
+        this.isWaterLevelSelected = state;
     }
     setBrushSize(size) {
         this.brushSize = ~~size;
