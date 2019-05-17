@@ -25,6 +25,8 @@ class HexMetrics {
     public static streamBedElevationOffset = -1.75;
     public static waterElevationOffset = -0.5;
     public static waterFlowAnimationSpeedCoefficient = 180.0;
+    public static waterFactor = 0.6;
+    public static waterBlendFactor = 1.0 - HexMetrics.waterFactor;
 
     private static corners: Array<BABYLON.Vector3> = [
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
@@ -123,6 +125,18 @@ class HexMetrics {
         }
 
         return interpolators;
+    }
+
+    public static getFirstWaterCorner(direction: HexDirection): BABYLON.Vector3 {
+        return HexMetrics.corners[direction].scale(HexMetrics.waterFactor);
+    }
+
+    public static getSecondWaterCorner(direction: HexDirection): BABYLON.Vector3 {
+        return HexMetrics.corners[direction + 1].scale(HexMetrics.waterFactor);
+    }
+
+    public static getWaterBridge(direction: HexDirection): BABYLON.Vector3 {
+        return HexMetrics.corners[direction].add(HexMetrics.corners[direction + 1]).scale(HexMetrics.waterBlendFactor);
     }
 }
 
@@ -338,10 +352,11 @@ class Prefabs {
     private static _roadMaterial: BABYLON.PBRCustomMaterial;
     private static _waterMaterial: BABYLON.PBRCustomMaterial;
     private static _waterShoreMaterial: BABYLON.PBRCustomMaterial;
+    private static _estuariesMaterial: BABYLON.PBRCustomMaterial;
 
     private static _foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
-            shore = sqrt(shore);
+            shore = sqrt(shore) * 0.9;
 
             vec2 noiseUV = worldXZ + t * 0.25;
             vec4 noise = texture2D(noiseTex, noiseUV * 0.015);
@@ -383,6 +398,24 @@ class Prefabs {
         }
     `;
 
+    private static _riverShaderFn = `
+        float River(vec2 riverUV, sampler2D noiseTex, float t) {
+            vec2 uv = riverUV;
+            vec2 uv2 = riverUV;
+
+            uv.x = uv.x * 0.0625 + t * 0.005;
+            uv.y -= t * 0.25;
+
+            uv2.x = uv2.x * 0.0625 - t * 0.0052;
+            uv2.y -= t * 0.23;
+            
+            vec4 noise = texture2D(noiseTex, uv);
+            vec4 noise2 = texture2D(noiseTex, uv2);
+
+            return noise.x * noise2.w;
+        }
+    `;
+
     private static terrainMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._terrainMaterial) {
             Prefabs._terrainMaterial = new BABYLON.PBRMaterial("pbr_mat", scene);
@@ -400,10 +433,10 @@ class Prefabs {
             Prefabs._riverMaterial = new BABYLON.PBRCustomMaterial("river_material", scene);
             Prefabs._riverMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
             Prefabs._riverMaterial.emissiveColor = BABYLON.Color3.FromHexString("#68AEEB");
-            Prefabs._riverMaterial.albedoColor = BABYLON.Color3.FromHexString("#68AEEB");
+            Prefabs._riverMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
             Prefabs._riverMaterial.metallic = 0;
             Prefabs._riverMaterial.roughness = 0.5;
-            Prefabs._riverMaterial.alpha = 0.9;
+            Prefabs._riverMaterial.alpha = 0;
             Prefabs._riverMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
             Prefabs._riverMaterial.transparencyMode = 2; 
 
@@ -428,20 +461,12 @@ class Prefabs {
                     );
                 }
             });
+
+            Prefabs._riverMaterial.Fragment_Definitions(`${Prefabs._riverShaderFn}`);
             
             Prefabs._riverMaterial.Fragment_Custom_Albedo(`
-                vec2 rUV = vAlbedoUV;
-                vec2 rUV2 = vAlbedoUV;
-
-                rUV.x = rUV.x * 0.0625 + time.y * 0.005;
-                rUV.y += time.y * 0.25;
-                vec4 noiseSample = texture2D(albedoSampler, rUV);
-
-                rUV2.x = rUV2.x * 0.0625 - time.y * 0.0052;
-                rUV2.y += time.y * 0.23;
-                vec4 noiseSample2 = texture2D(albedoSampler, rUV2);
-
-                vec4 c = clamp(vAlbedoColor * (noiseSample.r * noiseSample2.a), 0.0, 1.0);
+                float river = River(vAlbedoUV, albedoSampler, time.y);
+                vec4 c = clamp(vAlbedoColor + river, 0.0, 1.0);
 
                 surfaceAlbedo.rgb = c.rgb;
                 alpha = c.a;
@@ -501,7 +526,7 @@ class Prefabs {
             Prefabs._waterMaterial.roughness = 0.5;
             Prefabs._waterMaterial.alpha = 0.9;
             Prefabs._waterMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._waterMaterial.transparencyMode = 2; 
+            Prefabs._waterMaterial.transparencyMode = 2;
 
             Prefabs._waterMaterial.albedoTexture = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
@@ -547,7 +572,6 @@ class Prefabs {
             Prefabs._waterShoreMaterial.alpha = 0.9;
             Prefabs._waterShoreMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
             Prefabs._waterShoreMaterial.transparencyMode = 2; 
-            Prefabs._waterShoreMaterial.zOffset = -10.0;
 
             Prefabs._waterShoreMaterial.albedoTexture = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
@@ -580,7 +604,7 @@ class Prefabs {
                 float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
                 waves *= 1.0 - shore;
 
-                vec4 c = vec4(_color + max(foam, waves));
+                vec4 c = clamp(_color + max(foam, waves), 0.0, 1.0);
 
                 surfaceAlbedo.rgb = c.rgb;
                 alpha = c.a;
@@ -588,6 +612,74 @@ class Prefabs {
         }
         
         return Prefabs._waterShoreMaterial;
+    }
+
+    private static estuariesMaterial(scene: BABYLON.Scene) {
+        if (!Prefabs._estuariesMaterial) {
+            Prefabs._estuariesMaterial = new BABYLON.PBRCustomMaterial("estuaries_material", scene);
+            Prefabs._estuariesMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._estuariesMaterial.emissiveColor = BABYLON.Color3.FromHexString("#ffffff");
+            Prefabs._estuariesMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
+            Prefabs._estuariesMaterial.metallic = 0;
+            Prefabs._estuariesMaterial.roughness = 0.5;
+            Prefabs._estuariesMaterial.alpha = 0.9;
+            Prefabs._estuariesMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+            Prefabs._estuariesMaterial.transparencyMode = 2; 
+
+            Prefabs._estuariesMaterial.albedoTexture = new BABYLON.Texture(
+                './assets/gfx/material/noise.png',
+                scene,
+                true,
+                false,
+                BABYLON.Texture.BILINEAR_SAMPLINGMODE
+            );
+            Prefabs._estuariesMaterial.albedoTexture.coordinatesIndex = 1;
+            Prefabs._estuariesMaterial.albedoTexture.hasAlpha = true;
+
+            let t = 0;
+            Prefabs._estuariesMaterial.AddUniform("vTime", "vec3", null);
+            Prefabs._estuariesMaterial.onBindObservable.add(() => {
+                if (Prefabs._estuariesMaterial && Prefabs._estuariesMaterial.getEffect && Prefabs._estuariesMaterial.getEffect()) {
+                    t++;
+                    Prefabs._estuariesMaterial.getEffect().setVector3("vTime", new BABYLON.Vector3(0.0, t/180.0, 0.0));
+                }
+            });
+
+            Prefabs._estuariesMaterial.Vertex_Definitions(`
+                out vec2 vAlbedoUV2;
+            `);
+            Prefabs._estuariesMaterial.Vertex_MainEnd(`
+                vAlbedoUV2 = uv2;
+            `);
+            
+            Prefabs._estuariesMaterial.Fragment_Definitions(`
+                in vec2 vAlbedoUV2;
+
+                ${Prefabs._foamShaderFn}
+                
+                ${Prefabs._wavesShaderFn}
+
+                ${Prefabs._riverShaderFn}
+            `);
+
+            Prefabs._estuariesMaterial.Fragment_Custom_Albedo(`
+                vec4 _color = vec4(vEmissiveColor, 0.0);
+                float shore = vAlbedoUV.y;
+                float foam = Foam(shore, vPositionW.xz, albedoSampler, vTime.y);
+                float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
+                waves *= 1.0 - shore;
+
+                float shoreWater = max(foam, waves);
+                float river = River(vAlbedoUV2, albedoSampler, vTime.y);
+                float water = mix(shoreWater, river, vAlbedoUV.x);
+                vec4 c = clamp(_color + water, 0.0, 1.0);
+
+                surfaceAlbedo.rgb = c.rgb;
+                alpha = c.a;
+            `);
+        }
+        
+        return Prefabs._estuariesMaterial;
     }
 
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
@@ -610,6 +702,7 @@ class Prefabs {
         rivers._useColors = false;
         rivers._useCollider = false;
         rivers._useUVCoordinates = true;
+        rivers.alphaIndex = 100;
 
         return rivers;
     }
@@ -635,6 +728,7 @@ class Prefabs {
         water._useColors = false;
         water._useCollider = false;
         water._useUVCoordinates = false;
+        water.alphaIndex = 40;
 
         return water;
     }
@@ -647,8 +741,23 @@ class Prefabs {
         waterShore._useColors = false;
         waterShore._useCollider = false;
         waterShore._useUVCoordinates = true;
+        waterShore.alphaIndex = 50;
 
         return waterShore;
+    }
+
+    public static estuaries(name: string, scene: BABYLON.Scene): HexMesh {
+        let estuaries = new HexMesh(name, Prefabs.estuariesMaterial(scene), scene);
+
+        estuaries.isVisible = true;
+        estuaries.isPickable = false;
+        estuaries._useColors = false;
+        estuaries._useCollider = false;
+        estuaries._useUVCoordinates = true;
+        estuaries._useUV2Coordinates = true;
+        estuaries.alphaIndex = 40;
+
+        return estuaries;
     }
 }
 
@@ -709,12 +818,7 @@ class HexCell extends BABYLON.Mesh {
         this._cellPosition.y += 
             (HexMetrics.sampleNoise(this._cellPosition).y * 2.0 - 1.0) * HexMetrics.elevationPerturbStrength;
 
-        if (this._hasOutgoingRiver && elevation < this.getNeighbor(this._outgoingRiver).elevation) {
-            this.removeOutgoigRiver();
-        }
-        if (this._hasIncomingRiver && elevation > this.getNeighbor(this._incomingRiver).elevation) {
-            this.removeIncomingRiver();
-        }
+        this.validateRivers();
 
         for (let i = 0; i < this.roads.length; i++) {
             if (this.roads[i] && this.getElevationDifference(i) > 0) {
@@ -798,7 +902,7 @@ class HexCell extends BABYLON.Mesh {
 
         const neighbor = this.getNeighbor(direction);
 
-        if (!neighbor || this.elevation < neighbor.elevation) {
+        if (!this.isValidRiverDestination(neighbor)) {
             return;
         }
 
@@ -852,6 +956,26 @@ class HexCell extends BABYLON.Mesh {
         return (this._elevation + HexMetrics.streamBedElevationOffset) * HexMetrics.elevationStep;
     }
 
+    public isValidRiverDestination(neighbor: HexCell): boolean {
+        return neighbor && (
+            this.elevation >= neighbor.elevation || this.waterLevel === neighbor.elevation
+        );
+    }
+
+    public validateRivers(): void {
+        let 
+            outgoigRiverNeighbor = this.getNeighbor(this.outgoingRiver),
+            incomingRiverNeighbor = this.getNeighbor(this.incomingRiver);
+
+        if (this.hasOutgoingRiver && !this.isValidRiverDestination(outgoigRiverNeighbor)) {
+            this.removeOutgoigRiver();
+        }
+
+        if (this.hasIncomingRiver && !incomingRiverNeighbor.isValidRiverDestination(this)) {
+            this.removeIncomingRiver();
+        }
+    }
+
     public hasRoadThroughEdge(direction: HexDirection): boolean {
         return this.roads[direction];
     }
@@ -901,6 +1025,7 @@ class HexCell extends BABYLON.Mesh {
         }
 
         this._waterLevel = value;
+        this.validateRivers();
         this.refresh();
     }
 
@@ -998,13 +1123,15 @@ class EdgeVertices {
 class HexMesh extends BABYLON.Mesh {
     private static _material: BABYLON.Material = null;
 
-    private _vertices: Array<number>;
-    private _triangles: Array<number>;
-    private _colors: Array<number>;
-    private _uvs: Array<number>;
+    private _vertices: number[];
+    private _triangles: number[];
+    private _colors: number[];
+    private _uvs: number[];
+    private _uvs2: number[];
     
     public _useColors: boolean = true;
     public _useUVCoordinates: boolean = false;
+    public _useUV2Coordinates: boolean = false;
     public _useCollider: boolean = true;
 
     constructor(name: string, material: BABYLON.Material, scene: BABYLON.Scene) {
@@ -1032,6 +1159,9 @@ class HexMesh extends BABYLON.Mesh {
         if(this._useUVCoordinates) {
             vertexData.uvs = this._uvs;
         }
+        if (this._useUV2Coordinates) {
+            vertexData.uvs2 = this._uvs2;
+        }
 
         vertexData.applyToMesh(this, true);
 
@@ -1045,6 +1175,7 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles = [];
         this._colors = [];
         this._uvs = [];
+        this._uvs2 = [];
     }
 
     addTriangle(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3): void {
@@ -1085,6 +1216,20 @@ class HexMesh extends BABYLON.Mesh {
         this.addVertex(HexMetrics.perturb(v2));
         this.addVertex(HexMetrics.perturb(v3));
         this.addVertex(HexMetrics.perturb(v4));
+        this._triangles.push(vertexIndex);
+        this._triangles.push(vertexIndex + 2);
+        this._triangles.push(vertexIndex + 1);
+        this._triangles.push(vertexIndex + 1);
+        this._triangles.push(vertexIndex + 2);
+        this._triangles.push(vertexIndex + 3);
+    }
+
+    addQuadUnperturbed(v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3, v4: BABYLON.Vector3): void {
+        const vertexIndex = this._vertices.length/3;
+        this.addVertex(v1);
+        this.addVertex(v2);
+        this.addVertex(v3);
+        this.addVertex(v4);
         this._triangles.push(vertexIndex);
         this._triangles.push(vertexIndex + 2);
         this._triangles.push(vertexIndex + 1);
@@ -1135,11 +1280,24 @@ class HexMesh extends BABYLON.Mesh {
         this.addUV(uv3);
     }
 
+    addTriangleUV2(uv1: BABYLON.Vector2, uv2: BABYLON.Vector2, uv3: BABYLON.Vector2): void {
+        this.addUV2(uv1);
+        this.addUV2(uv2);
+        this.addUV2(uv3);
+    }
+
     addQuadUV(uv1: BABYLON.Vector2, uv2: BABYLON.Vector2, uv3: BABYLON.Vector2, uv4: BABYLON.Vector2): void {
         this.addUV(uv1);
         this.addUV(uv2);
         this.addUV(uv3);
         this.addUV(uv4);
+    }
+
+    addQuadUV2(uv1: BABYLON.Vector2, uv2: BABYLON.Vector2, uv3: BABYLON.Vector2, uv4: BABYLON.Vector2): void {
+        this.addUV2(uv1);
+        this.addUV2(uv2);
+        this.addUV2(uv3);
+        this.addUV2(uv4);
     }
 
     addQuadUVMinMax(uMin: number, uMax: number, vMin: number, vMax: number): void {
@@ -1149,9 +1307,21 @@ class HexMesh extends BABYLON.Mesh {
         this.addUV(new BABYLON.Vector2(uMax, vMax));
     }
 
+    addQuadUV2MinMax(uMin: number, uMax: number, vMin: number, vMax: number): void {
+        this.addUV2(new BABYLON.Vector2(uMin, vMin));
+        this.addUV2(new BABYLON.Vector2(uMax, vMin));
+        this.addUV2(new BABYLON.Vector2(uMin, vMax));
+        this.addUV2(new BABYLON.Vector2(uMax, vMax));
+    }
+
     addUV(uv: BABYLON.Vector2): void {
         this._uvs.push(uv.x);
         this._uvs.push(uv.y);
+    }
+
+    addUV2(uv: BABYLON.Vector2): void {
+        this._uvs2.push(uv.x);
+        this._uvs2.push(uv.y);
     }
 }
 
@@ -1163,6 +1333,7 @@ class HexGridChunk {
     private roads: HexMesh;
     private water: HexMesh;
     private waterShore: HexMesh;
+    private estuaries: HexMesh;
 
     constructor(name: string, scene: BABYLON.Scene) {
         this._scene = scene;
@@ -1171,6 +1342,7 @@ class HexGridChunk {
         this.roads = Prefabs.roads(`${name}_roads`, scene);
         this.water = Prefabs.water(`${name}_water`, scene);
         this.waterShore = Prefabs.waterShore(`${name}_water_shore`, scene);
+        this.estuaries = Prefabs.estuaries(`${name}_estuaries`, scene);
 
         this.cells = new Array<HexCell>(HexMetrics.chunkSizeX * HexMetrics.chunkSizeZ);
     }
@@ -1186,6 +1358,7 @@ class HexGridChunk {
         this.roads.clear();
         this.water.clear();
         this.waterShore.clear();
+        this.estuaries.clear();
 
         for (let i = 0; i < this.cells.length; i++) {
             for (let direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
@@ -1198,6 +1371,7 @@ class HexGridChunk {
         this.roads.apply();
         this.water.apply();
         this.waterShore.apply();
+        this.estuaries.apply();
     }
 
     triangulateCell(direction: HexDirection, cell: HexCell): void {
@@ -1252,14 +1426,14 @@ class HexGridChunk {
 
     triangulateOpenWater(direction: HexDirection, cell: HexCell, neighbor: HexCell, center: BABYLON.Vector3): void {
         let
-            c1 = center.add(HexMetrics.getFirstSolidCorner(direction)),
-            c2 = center.add(HexMetrics.getSecondSolidCorner(direction));
+            c1 = center.add(HexMetrics.getFirstWaterCorner(direction)),
+            c2 = center.add(HexMetrics.getSecondWaterCorner(direction));
 
         this.water.addTriangle(center, c1, c2);
 
         if (direction <= HexDirection.SE && neighbor != null) {
             let 
-                bridge = HexMetrics.getBridge(direction),
+                bridge = HexMetrics.getWaterBridge(direction),
                 e1 = c1.add(bridge),
                 e2 = c2.add(bridge);
 
@@ -1272,7 +1446,7 @@ class HexGridChunk {
                     return;
                 }
 
-                this.water.addTriangle(c2, e2, c2.add(HexMetrics.getBridge(HexDirection.next(direction))));
+                this.water.addTriangle(c2, e2, c2.add(HexMetrics.getWaterBridge(HexDirection.next(direction))));
             }
         }
     }
@@ -1281,8 +1455,8 @@ class HexGridChunk {
         let e1: EdgeVertices;
 
         e1 = EdgeVertices.fromCorners(
-            center.add(HexMetrics.getFirstSolidCorner(direction)),
-            center.add(HexMetrics.getSecondSolidCorner(direction))
+            center.add(HexMetrics.getFirstWaterCorner(direction)),
+            center.add(HexMetrics.getSecondWaterCorner(direction))
         );
 
         this.water.addTriangle(center, e1.v1, e1.v2);
@@ -1290,29 +1464,135 @@ class HexGridChunk {
         this.water.addTriangle(center, e1.v3, e1.v4);
         this.water.addTriangle(center, e1.v4, e1.v5);
 
-        let
-            bridge = HexMetrics.getBridge(direction),
-            e2 = EdgeVertices.fromCorners(
-                e1.v1.add(bridge),
-                e1.v5.add(bridge)
-            );
+        let center2 = neighbor.cellPosition.clone();
 
-        this.waterShore.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
-        this.waterShore.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
-        this.waterShore.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
-        this.waterShore.addQuad(e1.v4, e1.v5, e2.v4, e2.v5);
-        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
-        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
-        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
-        this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+        center2.y = center.y;
+
+        let e2 = EdgeVertices.fromCorners(
+            center2.add(HexMetrics.getSecondSolidCorner(HexDirection.opposite(direction))),
+            center2.add(HexMetrics.getFirstSolidCorner(HexDirection.opposite(direction)))
+        );
+        
+        if (cell.hasRiverThroughEdge(direction)) {
+            this.triangulateEstuary(e1, e2, cell.incomingRiver == direction);
+        } else {
+            this.waterShore.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
+            this.waterShore.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
+            this.waterShore.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
+            this.waterShore.addQuad(e1.v4, e1.v5, e2.v4, e2.v5);
+            this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+            this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+            this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+            this.waterShore.addQuadUVMinMax(0, 0, 0, 1);
+        }
 
         let nextNeighbor = cell.getNeighbor(HexDirection.next(direction));
         if (nextNeighbor != null) {
-            this.waterShore.addTriangle(e1.v5, e2.v5, e1.v5.add(HexMetrics.getBridge(HexDirection.next(direction))));
+            let v3 = nextNeighbor.cellPosition.clone().add(
+                nextNeighbor.isUnderwater
+                ? HexMetrics.getFirstWaterCorner(HexDirection.previous(direction))
+                : HexMetrics.getFirstSolidCorner(HexDirection.previous(direction))
+            );
+
+            v3.y = center.y;
+
+            this.waterShore.addTriangle(e1.v5, e2.v5, v3);
             this.waterShore.addTriangleUV(
                 new BABYLON.Vector2(0, 0),
                 new BABYLON.Vector2(0, 1),
                 new BABYLON.Vector2(0, nextNeighbor.isUnderwater ? 0 : 1)
+            );
+        }
+    }
+
+    triangulateWaterfallInWater(
+        v1: BABYLON.Vector3, v2: BABYLON.Vector3, v3: BABYLON.Vector3, v4: BABYLON.Vector3,
+        y1: number, y2: number, waterY: number
+    ): void {
+        v1 = v1.clone();
+        v2 = v2.clone();
+        v3 = v3.clone();
+        v4 = v4.clone();
+
+        v1.y = v2.y = y1;
+        v3.y = v4.y = y2;
+
+        v1 = HexMetrics.perturb(v1);
+        v2 = HexMetrics.perturb(v2);
+        v3 = HexMetrics.perturb(v3);
+        v4 = HexMetrics.perturb(v4);
+        
+        let t = (waterY - y2) / (y1 - y2);
+        
+        v3 = BABYLON.Vector3.Lerp(v3, v1, t);
+        v4 = BABYLON.Vector3.Lerp(v4, v2, t);
+
+        this.rivers.addQuadUnperturbed(v1, v2, v3, v4);
+        this.rivers.addQuadUVMinMax(0, 1, 0.8, 1);
+    }
+
+    triangulateEstuary(e1: EdgeVertices, e2: EdgeVertices, incomingRiver: boolean): void {
+        this.waterShore.addTriangle(e2.v1, e1.v2, e1.v1);
+        this.waterShore.addTriangle(e2.v5, e1.v5, e1.v4);
+        this.waterShore.addTriangleUV(
+            new BABYLON.Vector2(0, 1),
+            new BABYLON.Vector2(0, 0),
+            new BABYLON.Vector2(0, 0)
+        );
+        this.waterShore.addTriangleUV(
+            new BABYLON.Vector2(0, 1),
+            new BABYLON.Vector2(0, 0),
+            new BABYLON.Vector2(0, 0)
+        );
+
+        this.estuaries.addQuad(e2.v1, e1.v2, e2.v2, e1.v3);
+        this.estuaries.addTriangle(e1.v3, e2.v2, e2.v4);
+        this.estuaries.addQuad(e1.v3, e1.v4, e2.v4, e2.v5);
+
+        this.estuaries.addQuadUV(
+            new BABYLON.Vector2(0, 1), new BABYLON.Vector2(0, 0),
+            new BABYLON.Vector2(1, 1), new BABYLON.Vector2(0, 0)
+        );
+
+        this.estuaries.addTriangleUV(
+            new BABYLON.Vector2(0, 0),
+            new BABYLON.Vector2(1, 1),
+            new BABYLON.Vector2(1, 1)
+        );
+
+        this.estuaries.addQuadUV(
+            new BABYLON.Vector2(0, 0), new BABYLON.Vector2(0, 0),
+            new BABYLON.Vector2(1, 1), new BABYLON.Vector2(0, 1)
+        );
+
+        if (incomingRiver) {
+            this.estuaries.addQuadUV2(
+                new BABYLON.Vector2(1.5, 1.1), new BABYLON.Vector2(0.7, 1.15),
+                new BABYLON.Vector2(1, 0.8), new BABYLON.Vector2(0.5, 1.1)
+            );
+            this.estuaries.addTriangleUV2(
+                new BABYLON.Vector2(0.5, 1.1),
+                new BABYLON.Vector2(1, 0.8),
+                new BABYLON.Vector2(0, 0.8)
+            );
+            this.estuaries.addQuadUV2(
+                new BABYLON.Vector2(0.5, 1.1), new BABYLON.Vector2(0.3, 1.15),
+                new BABYLON.Vector2(0, 0.8), new BABYLON.Vector2(-0.5, 1.0)
+            );
+        }
+        else {
+            this.estuaries.addQuadUV2(
+                new BABYLON.Vector2(-0.5, -0.2), new BABYLON.Vector2(0.3, -0.35),
+                new BABYLON.Vector2(0, 0), new BABYLON.Vector2(0.5, -0.3)
+            );
+            this.estuaries.addTriangleUV2(
+                new BABYLON.Vector2(0.5, -0.3),
+                new BABYLON.Vector2(0, 0),
+                new BABYLON.Vector2(1, 0)
+            );
+            this.estuaries.addQuadUV2(
+                new BABYLON.Vector2(0.5, -0.3), new BABYLON.Vector2(0.7, -0.35),
+                new BABYLON.Vector2(1, 0), new BABYLON.Vector2(1.5, -0.2)
             );
         }
     }
@@ -1386,10 +1666,12 @@ class HexGridChunk {
         this.terrain.addTriangle(centerR, m.v4, m.v5);
         this.terrain.addTriangleColor1(cell.color);
 
-        let reversed = cell.incomingRiver === direction;
+        if (!cell.isUnderwater) {
+            let reversed = cell.incomingRiver === direction;
 
-        this.triangulateRiverQuad(centerL, centerR, m.v2, m.v4, cell.riverSurfaceY, 0.4, reversed);
-        this.triangulateRiverQuad(m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed);
+            this.triangulateRiverQuad(centerL, centerR, m.v2, m.v4, cell.riverSurfaceY, 0.4, reversed);
+            this.triangulateRiverQuad(m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed);
+        }
     }
 
     triangulateWithRiverBeginOrEnd(direction: HexDirection, cell: HexCell, center: BABYLON.Vector3, e: EdgeVertices): void {
@@ -1402,30 +1684,32 @@ class HexGridChunk {
 
         this.triangulateEdgeStrip(m, cell.color, e, cell.color);
         this.triangulateEdgeFan(center, m, cell.color);
-
-        let reversed = cell.hasIncomingRiver;
-        this.triangulateRiverQuad(
-            m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed
-        );
-
-        center = center.clone();
-        m = m.clone();
-        center.y = m.v2.y = m.v4.y = cell.riverSurfaceY;
-        this.rivers.addTriangle(center, m.v2, m.v4);
-
-        if (reversed) {
-            this.rivers.addTriangleUV(
-                new BABYLON.Vector2(0.5, 0.4), 
-                new BABYLON.Vector2(1, 0.2), 
-                new BABYLON.Vector2(0, 0.2)
+        
+        if (!cell.isUnderwater) {
+            let reversed = cell.hasIncomingRiver;
+            this.triangulateRiverQuad(
+                m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed
             );
-        }
-        else {
-            this.rivers.addTriangleUV(
-                new BABYLON.Vector2(0.5, 0.4),
-                new BABYLON.Vector2(0, 0.6),
-                new BABYLON.Vector2(1, 0.6)
-            );
+
+            center = center.clone();
+            m = m.clone();
+            center.y = m.v2.y = m.v4.y = cell.riverSurfaceY;
+            this.rivers.addTriangle(center, m.v2, m.v4);
+
+            if (reversed) {
+                this.rivers.addTriangleUV(
+                    new BABYLON.Vector2(0.5, 0.4), 
+                    new BABYLON.Vector2(1, 0.2), 
+                    new BABYLON.Vector2(0, 0.2)
+                );
+            }
+            else {
+                this.rivers.addTriangleUV(
+                    new BABYLON.Vector2(0.5, 0.4),
+                    new BABYLON.Vector2(0, 0.6),
+                    new BABYLON.Vector2(1, 0.6)
+                );
+            }
         }
     }
 
@@ -1626,11 +1910,30 @@ class HexGridChunk {
 
         if (cell.hasRiverThroughEdge(direction)) {
             e2.v3.y = neighbor.streamBedY;
-            this.triangulateRiverQuadWithDiff(
-                e1.v2, e1.v4, e2.v2, e2.v4,
-                cell.riverSurfaceY, neighbor.riverSurfaceY, 0.8,
-                cell.hasIncomingRiver && cell.incomingRiver === direction
-            );
+
+            if (!cell.isUnderwater) {
+                if (!neighbor.isUnderwater) {
+                    this.triangulateRiverQuadWithDiff(
+                        e1.v2, e1.v4, e2.v2, e2.v4,
+                        cell.riverSurfaceY, neighbor.riverSurfaceY, 0.8,
+                        cell.hasIncomingRiver && cell.incomingRiver === direction
+                    );
+                }
+                else if (cell.elevation > neighbor.waterLevel) {
+                    this.triangulateWaterfallInWater(
+                        e1.v2, e1.v4, e2.v2, e2.v4,
+                        cell.riverSurfaceY, neighbor.riverSurfaceY,
+                        neighbor.waterSurfaceY
+                    );
+                }
+            }
+            else if (!neighbor.isUnderwater && neighbor.elevation > cell.waterLevel) {
+                this.triangulateWaterfallInWater(
+                    e2.v4, e2.v2, e1.v4, e1.v2,
+                    neighbor.riverSurfaceY, cell.riverSurfaceY,
+                    cell.waterSurfaceY
+                );
+            }
         }
 
         if (cell.getEdgeType(direction) === HexEdgeType.Slope) {
