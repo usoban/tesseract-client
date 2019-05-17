@@ -46,6 +46,12 @@ class HexMetrics {
     static sampleNoise(position) {
         return Texture.sample(HexMetrics.noiseTexture, position);
     }
+    static sampleHashGrid(position) {
+        let x = ~~(position.x * HexMetrics.hashGridScale) % HexMetrics.hashGridSize, z = ~~(position.z * HexMetrics.hashGridScale) % HexMetrics.hashGridSize;
+        x = x < 0 ? x + HexMetrics.hashGridSize : x;
+        z = z < 0 ? z + HexMetrics.hashGridSize : z;
+        return HexMetrics.hashGrid[x + z * HexMetrics.hashGridSize];
+    }
     static perturb(position) {
         let sample = HexMetrics.sampleNoise(position);
         return new BABYLON.Vector3(position.x + (sample.x * 2.0 - 1.0) * HexMetrics.cellPerturbStrength, position.y, position.z + (sample.z * 2.0 - 1.0) * HexMetrics.cellPerturbStrength);
@@ -70,6 +76,16 @@ class HexMetrics {
     static getWaterBridge(direction) {
         return HexMetrics.corners[direction].add(HexMetrics.corners[direction + 1]).scale(HexMetrics.waterBlendFactor);
     }
+    static initializeHashGrid(seed) {
+        HexMetrics.hashGrid = new Array(HexMetrics.hashGridSize * HexMetrics.hashGridSize);
+        let rng = new Math.seedrandom(seed);
+        for (let i = 0; i < HexMetrics.hashGrid.length; i++) {
+            HexMetrics.hashGrid[i] = HexHash.create(rng);
+        }
+    }
+    static getFeatureThreshold(level) {
+        return HexMetrics.featureThresholds[level];
+    }
 }
 HexMetrics.outerToInner = 0.866025404;
 HexMetrics.innerToOuter = 1.0 / HexMetrics.outerToInner;
@@ -92,6 +108,13 @@ HexMetrics.waterElevationOffset = -0.5;
 HexMetrics.waterFlowAnimationSpeedCoefficient = 180.0;
 HexMetrics.waterFactor = 0.6;
 HexMetrics.waterBlendFactor = 1.0 - HexMetrics.waterFactor;
+HexMetrics.hashGridSize = 256;
+HexMetrics.hashGridScale = 0.25;
+HexMetrics.featureThresholds = [
+    [0.0, 0.0, 0.4],
+    [0.0, 0.4, 0.6],
+    [0.4, 0.6, 0.8]
+];
 HexMetrics.corners = [
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
     new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
@@ -231,6 +254,17 @@ class HexCoordinates {
     }
     toString() {
         return `(${this.x}, ${this.y}, ${this.z})`;
+    }
+}
+class HexHash {
+    static create(randomFn) {
+        let hexHash = new HexHash();
+        hexHash.a = randomFn() * .999;
+        hexHash.b = randomFn() * .999;
+        hexHash.c = randomFn() * .999;
+        hexHash.d = randomFn() * .999;
+        hexHash.e = randomFn() * .999;
+        return hexHash;
     }
 }
 class HexCellColor {
@@ -464,6 +498,33 @@ class Prefabs {
         }
         return Prefabs._estuariesMaterial;
     }
+    static urbanFeatureMaterial(scene) {
+        if (!Prefabs._urbanFeatureMaterial) {
+            Prefabs._urbanFeatureMaterial = new BABYLON.StandardMaterial("feature_material", scene);
+            Prefabs._urbanFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._urbanFeatureMaterial.emissiveColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._urbanFeatureMaterial.specularColor = BABYLON.Color3.Black();
+        }
+        return Prefabs._urbanFeatureMaterial;
+    }
+    static farmFeatureMaterial(scene) {
+        if (!Prefabs._farmFeatureMaterial) {
+            Prefabs._farmFeatureMaterial = new BABYLON.StandardMaterial("feature_material", scene);
+            Prefabs._farmFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#acdd20");
+            Prefabs._farmFeatureMaterial.emissiveColor = BABYLON.Color3.FromHexString("#acdd20");
+            Prefabs._farmFeatureMaterial.specularColor = BABYLON.Color3.Black();
+        }
+        return Prefabs._farmFeatureMaterial;
+    }
+    static plantFeatureMaterial(scene) {
+        if (!Prefabs._plantFeatureMaterial) {
+            Prefabs._plantFeatureMaterial = new BABYLON.StandardMaterial("feature_material", scene);
+            Prefabs._plantFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#2e8923");
+            Prefabs._plantFeatureMaterial.emissiveColor = BABYLON.Color3.FromHexString("#2e8923");
+            Prefabs._plantFeatureMaterial.specularColor = BABYLON.Color3.Black();
+        }
+        return Prefabs._plantFeatureMaterial;
+    }
     static terrain(name, scene) {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
@@ -523,6 +584,27 @@ class Prefabs {
         estuaries._useUV2Coordinates = true;
         estuaries.alphaIndex = 40;
         return estuaries;
+    }
+    static urbanFeature(options, name, scene) {
+        let cubeMesh = BABYLON.MeshBuilder.CreateBox(name, options, scene);
+        cubeMesh.material = Prefabs.urbanFeatureMaterial(scene);
+        cubeMesh.isVisible = true;
+        cubeMesh.isPickable = false;
+        return cubeMesh;
+    }
+    static farmFeature(options, name, scene) {
+        let cubeMesh = BABYLON.MeshBuilder.CreateBox(name, options, scene);
+        cubeMesh.material = Prefabs.farmFeatureMaterial(scene);
+        cubeMesh.isVisible = true;
+        cubeMesh.isPickable = false;
+        return cubeMesh;
+    }
+    static plantFeature(options, name, scene) {
+        let cubeMesh = BABYLON.MeshBuilder.CreateBox(name, options, scene);
+        cubeMesh.material = Prefabs.plantFeatureMaterial(scene);
+        cubeMesh.isVisible = true;
+        cubeMesh.isPickable = false;
+        return cubeMesh;
     }
 }
 Prefabs._foamShaderFn = `
@@ -593,6 +675,9 @@ class HexCell extends BABYLON.Mesh {
         this.neighbors = new Array(6);
         this._elevation = Number.MIN_VALUE;
         this.roads = new Array(6);
+        this._urbanLevel = 0;
+        this._farmLevel = 0;
+        this._plantLevel = 0;
         let options = {
             size: 10,
             width: 10,
@@ -776,6 +861,36 @@ class HexCell extends BABYLON.Mesh {
     }
     get isUnderwater() {
         return this.waterLevel > this.elevation;
+    }
+    get urbanLevel() {
+        return this._urbanLevel;
+    }
+    set urbanLevel(level) {
+        if (this._urbanLevel === level) {
+            return;
+        }
+        this._urbanLevel = level;
+        this.refreshSelfOnly();
+    }
+    get farmLevel() {
+        return this._farmLevel;
+    }
+    set farmLevel(level) {
+        if (this._farmLevel === level) {
+            return;
+        }
+        this._farmLevel = level;
+        this.refreshSelfOnly();
+    }
+    get plantLevel() {
+        return this._plantLevel;
+    }
+    set plantLevel(level) {
+        if (this._plantLevel === level) {
+            return;
+        }
+        this._plantLevel = level;
+        this.refreshSelfOnly();
     }
     getEdgeType(direction) {
         return HexMetrics.getEdgeType(this.elevation, this.neighbors[direction].elevation);
@@ -1006,7 +1121,135 @@ class HexMesh extends BABYLON.Mesh {
         this._uvs2.push(uv.y);
     }
 }
-HexMesh._material = null;
+var HexFeatureDensity;
+(function (HexFeatureDensity) {
+    // LOW, MEDIUM, HIGH
+    HexFeatureDensity[HexFeatureDensity["HIGH"] = 0] = "HIGH";
+    HexFeatureDensity[HexFeatureDensity["MEDIUM"] = 1] = "MEDIUM";
+    HexFeatureDensity[HexFeatureDensity["LOW"] = 2] = "LOW";
+})(HexFeatureDensity || (HexFeatureDensity = {}));
+class HexFeatureCollection {
+    constructor(prefabFn, prefabArgs) {
+        this._prefabFn = prefabFn;
+        this._prefabArgs = prefabArgs;
+    }
+    pickAndMake(choice, name, scene) {
+        let idx = ~~(choice * this._prefabArgs.length);
+        return this._prefabFn(this._prefabArgs[idx], name, scene);
+    }
+}
+HexFeatureCollection.urbanFeatures = [
+    //  HIGH
+    new HexFeatureCollection(Prefabs.urbanFeature, [
+        { width: 2.0, height: 5.0, depth: 2.0 },
+        { width: 3.5, height: 3.0, depth: 2.0 }
+    ]),
+    // MEDIUM
+    new HexFeatureCollection(Prefabs.urbanFeature, [
+        { width: 1.5, height: 2.0, depth: 1.5 },
+        { width: 2.75, height: 1.5, depth: 1.5 }
+    ]),
+    // LOW
+    new HexFeatureCollection(Prefabs.urbanFeature, [
+        { width: 1.0, height: 1.0, depth: 1.0 },
+        { width: 1.75, height: 1.0, depth: 1.0 }
+    ])
+];
+HexFeatureCollection.farmFeatures = [
+    //  HIGH
+    new HexFeatureCollection(Prefabs.farmFeature, [
+        { width: 2.5, height: 0.1, depth: 2.5 },
+        { width: 3.5, height: 0.1, depth: 2.0 }
+    ]),
+    // MEDIUM
+    new HexFeatureCollection(Prefabs.farmFeature, [
+        { width: 1.75, height: 0.1, depth: 1.75 },
+        { width: 2.5, height: 0.1, depth: 1.25 }
+    ]),
+    // LOW
+    new HexFeatureCollection(Prefabs.farmFeature, [
+        { width: 1.0, height: 0.1, depth: 1.0 },
+        { width: 1.5, height: 0.1, depth: 0.75 }
+    ])
+];
+HexFeatureCollection.plantFeatures = [
+    //  HIGH
+    new HexFeatureCollection(Prefabs.plantFeature, [
+        { width: 1.25, height: 4.5, depth: 1.25 },
+        { width: 1.5, height: 3.0, depth: 1.5 }
+    ]),
+    // MEDIUM
+    new HexFeatureCollection(Prefabs.plantFeature, [
+        { width: 0.75, height: 3.0, depth: 0.75 },
+        { width: 1.0, height: 1.5, depth: 1.0 }
+    ]),
+    // LOW
+    new HexFeatureCollection(Prefabs.plantFeature, [
+        { width: 0.5, height: 1.5, depth: 0.5 },
+        { width: 0.75, height: 1.0, depth: 0.75 }
+    ])
+];
+class HexFeatureManager {
+    constructor(scene) {
+        this._scene = scene;
+    }
+    clear() {
+        if (this._container) {
+            this._container.dispose();
+        }
+        this._container = new BABYLON.TransformNode("feature_container", this._scene);
+    }
+    apply() {
+    }
+    addFeature(cell, position) {
+        let hash = HexMetrics.sampleHashGrid(position);
+        let instance = this.pickPrefab(`feature_${position.x}_${position.z}_urban`, HexFeatureCollection.urbanFeatures, cell.urbanLevel, hash.a, hash.d);
+        let otherInstance = this.pickPrefab(`feature_${position.x}_${position.z}_farm`, HexFeatureCollection.farmFeatures, cell.farmLevel, hash.b, hash.d);
+        let usedHash = hash.a;
+        if (instance) {
+            if (otherInstance && hash.b < hash.a) {
+                let tmp = instance;
+                instance = otherInstance;
+                usedHash = hash.b;
+                tmp.dispose();
+            }
+        }
+        else if (otherInstance) {
+            instance = otherInstance;
+            usedHash = hash.b;
+        }
+        otherInstance = this.pickPrefab(`feature_${position.x}_${position.z}_plant`, HexFeatureCollection.plantFeatures, cell.plantLevel, hash.c, hash.d);
+        if (instance) {
+            if (otherInstance && hash.c < usedHash) {
+                let tmp = instance;
+                instance = otherInstance;
+                tmp.dispose();
+            }
+        }
+        else if (otherInstance) {
+            instance = otherInstance;
+        }
+        else {
+            return;
+        }
+        instance.position = position.clone();
+        instance.position.y += instance.getBoundingInfo().boundingBox.extendSize.y;
+        instance.position = HexMetrics.perturb(instance.position);
+        instance.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, 360.0 * hash.e, 0);
+        instance.setParent(this._container);
+    }
+    pickPrefab(name, collection, level, hash, choice) {
+        if (level > 0) {
+            let thresholds = HexMetrics.getFeatureThreshold(level - 1);
+            for (let i = 0; i < thresholds.length; i++) {
+                if (hash < thresholds[i]) {
+                    return collection[i].pickAndMake(choice, name, this._scene);
+                }
+            }
+        }
+        return null;
+    }
+}
 class HexGridChunk {
     constructor(name, scene) {
         this._scene = scene;
@@ -1016,6 +1259,7 @@ class HexGridChunk {
         this.water = Prefabs.water(`${name}_water`, scene);
         this.waterShore = Prefabs.waterShore(`${name}_water_shore`, scene);
         this.estuaries = Prefabs.estuaries(`${name}_estuaries`, scene);
+        this.features = new HexFeatureManager(scene);
         this.cells = new Array(HexMetrics.chunkSizeX * HexMetrics.chunkSizeZ);
     }
     addCell(index, cell) {
@@ -1029,9 +1273,14 @@ class HexGridChunk {
         this.water.clear();
         this.waterShore.clear();
         this.estuaries.clear();
+        this.features.clear();
         for (let i = 0; i < this.cells.length; i++) {
+            let cell = this.cells[i];
             for (let direction = HexDirection.NE; direction <= HexDirection.NW; direction++) {
-                this.triangulateCell(direction, this.cells[i]);
+                this.triangulateCell(direction, cell);
+            }
+            if (!cell.isUnderwater && !cell.hasRiver && !cell.hasRoads) {
+                this.features.addFeature(cell, cell.cellPosition);
             }
         }
         this.terrain.apply();
@@ -1040,6 +1289,7 @@ class HexGridChunk {
         this.water.apply();
         this.waterShore.apply();
         this.estuaries.apply();
+        this.features.apply();
     }
     triangulateCell(direction, cell) {
         let center = cell.cellPosition.clone(), e = EdgeVertices.fromCorners(center.add(HexMetrics.getFirstSolidCorner(direction)), center.add(HexMetrics.getSecondSolidCorner(direction)));
@@ -1059,6 +1309,9 @@ class HexGridChunk {
         }
         else {
             this.triangulateCellWithoutRiver(direction, cell, center, e);
+            if (!cell.isUnderwater && !cell.hasRoadThroughEdge(direction)) {
+                this.features.addFeature(cell, center.add(e.v1).add(e.v5).scale(1 / 3));
+            }
         }
         if (direction <= HexDirection.SE) {
             this.triangulateCellConnection(direction, cell, e);
@@ -1251,6 +1504,9 @@ class HexGridChunk {
         let m = EdgeVertices.fromCorners(BABYLON.Vector3.Lerp(center, e.v1, 0.5), BABYLON.Vector3.Lerp(center, e.v5, 0.5));
         this.triangulateEdgeStrip(m, cell.color, e, cell.color);
         this.triangulateEdgeFan(center, m, cell.color);
+        if (!cell.isUnderwater && !cell.hasRoadThroughEdge(direction)) {
+            this.features.addFeature(cell, center.add(e.v1).add(e.v5).scale(1 / 3));
+        }
     }
     triangulateRoadAdjectedToRiver(direction, cell, center, e) {
         let hasRoadThroughEdge = cell.hasRoadThroughEdge(direction), previousHasRiver = cell.hasRiverThroughEdge(HexDirection.previous(direction)), nextHasRiver = cell.hasRiverThroughEdge(HexDirection.next(direction)), interpolators = HexMetrics.getRoadInterpolators(direction, cell), roadCenter = center.clone();
@@ -1574,6 +1830,7 @@ class HexGrid {
             bilinearTexture = new Texture(Float32Array.from(noiseTexture.data), noiseTexture.width, noiseTexture.height);
             Texture.bilinearFiltered(noiseTexture, bilinearTexture, 1.0);
             HexMetrics.noiseTexture = bilinearTexture;
+            HexMetrics.initializeHashGrid(1234);
             this.makeChunks();
             this.makeCells();
             this.chunks.forEach(c => c.refresh());
@@ -1701,8 +1958,14 @@ class HexMapEditor {
         this.activeColor = null;
         this.activeElevation = 0.0;
         this.activeWaterLevel = 0.0;
+        this.activeUrbanLevel = 0.0;
+        this.activeFarmLevel = 0.0;
+        this.activePlantLevel = 0.0;
         this.isElevationSelected = false;
         this.isWaterLevelSelected = false;
+        this.isUrbanLevelSelected = false;
+        this.isFarmLevelSelected = false;
+        this.isPlantLevelSelected = false;
         this.brushSize = 0;
         this.riverMode = OptionalToggle.Ignore;
         this.roadMode = OptionalToggle.Ignore;
@@ -1733,9 +1996,12 @@ class HexMapEditor {
         HexMapEditor.COLORS.forEach(colorOption => {
             colorGroup.addRadio(colorOption.label, this.setActiveColor.bind(this), this.activeColor === colorOption.color);
         });
-        // Elevation check.
+        // Tool checkboxes.
         elevationGroup.addCheckbox("Elevation", this.toggleElevation.bind(this), this.isElevationSelected);
         elevationGroup.addCheckbox("Water Level", this.toggleWaterLevel.bind(this), this.isWaterLevelSelected);
+        elevationGroup.addCheckbox("Urban Level", this.toggleUrbanLevel.bind(this), this.isUrbanLevelSelected);
+        elevationGroup.addCheckbox("Farm Level", this.toggleFarmLevel.bind(this), this.isFarmLevelSelected);
+        elevationGroup.addCheckbox("Plant Level", this.togglePlantLevel.bind(this), this.isPlantLevelSelected);
         // River
         riverGroup.addRadio(OptionalToggle[OptionalToggle.Ignore], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.Ignore);
         riverGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.Yes);
@@ -1745,8 +2011,11 @@ class HexMapEditor {
         roadGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRoadMode.bind(this), this.roadMode === OptionalToggle.Yes);
         roadGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRoadMode.bind(this), this.roadMode === OptionalToggle.No);
         // Tool sliders.
-        slidersGroup.addSlider("Elevation", this.setElevation.bind(this), "unit", 0, 7, this.activeElevation, (v) => Math.floor(v));
-        slidersGroup.addSlider("Water Level", this.setWaterLevel.bind(this), "unit", 0, 7, this.activeWaterLevel, (v) => Math.floor(v));
+        slidersGroup.addSlider("Elevation", this.setElevation.bind(this), "unit", 0, 7, this.activeElevation, (v) => ~~v);
+        slidersGroup.addSlider("Water Level", this.setWaterLevel.bind(this), "unit", 0, 7, this.activeWaterLevel, (v) => ~~v);
+        slidersGroup.addSlider("Urban Level", this.setUrbanLevel.bind(this), "unit", 0, 3, this.activeUrbanLevel, (v) => ~~v);
+        slidersGroup.addSlider("Farm Level", this.setFarmLevel.bind(this), "unit", 0, 3, this.activeFarmLevel, (v) => ~~v);
+        slidersGroup.addSlider("Plant Level", this.setPlantLevel.bind(this), "unit", 0, 3, this.activePlantLevel, (v) => ~~v);
         slidersGroup.addSlider("Brush size", this.setBrushSize.bind(this), "cell", 0, 4, this.brushSize, (v) => ~~v);
         this.selectionPanel.addGroup(colorGroup);
         this.selectionPanel.addGroup(riverGroup);
@@ -1814,9 +2083,6 @@ class HexMapEditor {
         if (!cell) {
             return;
         }
-        // console.log(cell.chunk.rivers.parent);
-        // console.log(cell.chunk.water.absolutePosition);
-        // console.log(cell.chunk.terrain.absolutePosition);
         if (this.activeColor !== null) {
             cell.color = this.activeColor;
         }
@@ -1825,6 +2091,15 @@ class HexMapEditor {
         }
         if (this.isWaterLevelSelected) {
             cell.waterLevel = this.activeWaterLevel;
+        }
+        if (this.isUrbanLevelSelected) {
+            cell.urbanLevel = this.activeUrbanLevel;
+        }
+        if (this.isFarmLevelSelected) {
+            cell.farmLevel = this.activeFarmLevel;
+        }
+        if (this.isPlantLevelSelected) {
+            cell.plantLevel = this.activePlantLevel;
         }
         if (this.riverMode === OptionalToggle.No) {
             cell.removeRiver();
@@ -1879,6 +2154,24 @@ class HexMapEditor {
     }
     setBrushSize(size) {
         this.brushSize = ~~size;
+    }
+    toggleUrbanLevel(state) {
+        this.isUrbanLevelSelected = state;
+    }
+    setUrbanLevel(level) {
+        this.activeUrbanLevel = ~~level;
+    }
+    toggleFarmLevel(state) {
+        this.isFarmLevelSelected = state;
+    }
+    setFarmLevel(level) {
+        this.activeFarmLevel = ~~level;
+    }
+    togglePlantLevel(state) {
+        this.isPlantLevelSelected = state;
+    }
+    setPlantLevel(level) {
+        this.activePlantLevel = ~~level;
     }
     setRiverMode(mode) {
         this.riverMode = mode;
