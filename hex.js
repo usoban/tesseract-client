@@ -86,6 +86,23 @@ class HexMetrics {
     static getFeatureThreshold(level) {
         return HexMetrics.featureThresholds[level];
     }
+    static wallThicknessOffset(near, far) {
+        let offset = new BABYLON.Vector3();
+        offset.x = far.x - near.x;
+        offset.y = 0;
+        offset.z = far.z - near.z;
+        return offset.normalize().scale(HexMetrics.wallThickness * 0.5);
+    }
+    static wallLerp(near, far) {
+        near = near.clone();
+        near.x += (far.x - near.x) * 0.5;
+        near.z += (far.z - near.z) * 0.5;
+        let v = (near.y < far.y
+            ? HexMetrics.wallElevationOffset
+            : (1.0 - HexMetrics.wallElevationOffset));
+        near.y += (far.y - near.y) * v;
+        return near;
+    }
 }
 HexMetrics.outerToInner = 0.866025404;
 HexMetrics.innerToOuter = 1.0 / HexMetrics.outerToInner;
@@ -115,6 +132,9 @@ HexMetrics.featureThresholds = [
     [0.0, 0.4, 0.6],
     [0.4, 0.6, 0.8]
 ];
+HexMetrics.wallHeight = 3.0;
+HexMetrics.wallThickness = 0.75;
+HexMetrics.wallElevationOffset = HexMetrics.verticalTerraceStepSize;
 HexMetrics.corners = [
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
     new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
@@ -525,6 +545,16 @@ class Prefabs {
         }
         return Prefabs._plantFeatureMaterial;
     }
+    static wallsMaterial(scene) {
+        if (!Prefabs._wallsMaterial) {
+            Prefabs._wallsMaterial = new BABYLON.PBRMaterial("walls_material", scene);
+            Prefabs._wallsMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._wallsMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._wallsMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._wallsMaterial.metallic = 0;
+        }
+        return Prefabs._wallsMaterial;
+    }
     static terrain(name, scene) {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
@@ -606,6 +636,15 @@ class Prefabs {
         cubeMesh.isPickable = false;
         return cubeMesh;
     }
+    static walls(name, scene) {
+        let walls = new HexMesh(name, Prefabs.wallsMaterial(scene), scene);
+        walls.isVisible = true;
+        walls.isPickable = false;
+        walls._useColors = false;
+        walls._useCollider = false;
+        walls._useUVCoordinates = false;
+        return walls;
+    }
 }
 Prefabs._foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
@@ -678,6 +717,7 @@ class HexCell extends BABYLON.Mesh {
         this._urbanLevel = 0;
         this._farmLevel = 0;
         this._plantLevel = 0;
+        this._walled = false;
         let options = {
             size: 10,
             width: 10,
@@ -891,6 +931,16 @@ class HexCell extends BABYLON.Mesh {
         }
         this._plantLevel = level;
         this.refreshSelfOnly();
+    }
+    get walled() {
+        return this._walled;
+    }
+    set walled(value) {
+        if (this._walled === value) {
+            return;
+        }
+        this._walled = value;
+        this.refresh();
     }
     getEdgeType(direction) {
         return HexMetrics.getEdgeType(this.elevation, this.neighbors[direction].elevation);
@@ -1192,14 +1242,129 @@ HexFeatureCollection.plantFeatures = [
 class HexFeatureManager {
     constructor(scene) {
         this._scene = scene;
+        this._walls = Prefabs.walls(`walls_${Math.random()}`, scene);
     }
     clear() {
         if (this._container) {
             this._container.dispose();
         }
         this._container = new BABYLON.TransformNode("feature_container", this._scene);
+        this._walls.clear();
     }
     apply() {
+        this._walls.apply();
+    }
+    addWall(near, nearCell, far, farCell, hasRiver, hasRoad) {
+        if (nearCell.walled !== farCell.walled &&
+            !nearCell.isUnderwater && !farCell.isUnderwater &&
+            nearCell.getEdgeTypeForCell(farCell) !== HexEdgeType.Cliff) {
+            this.addWallSegment(near.v1, far.v1, near.v2, far.v2);
+            if (hasRiver || hasRoad) {
+                this.addWallCap(near.v2, far.v2);
+                this.addWallCap(far.v4, near.v4);
+            }
+            else {
+                this.addWallSegment(near.v2, far.v2, near.v3, far.v3);
+                this.addWallSegment(near.v3, far.v3, near.v4, far.v4);
+            }
+            this.addWallSegment(near.v4, far.v4, near.v5, far.v5);
+        }
+    }
+    addWallCorner(c1, cell1, c2, cell2, c3, cell3) {
+        if (cell1.walled) {
+            if (cell2.walled) {
+                if (!cell3.walled) {
+                    this.addWallSegmentCorner(c3, cell3, c1, cell1, c2, cell2);
+                }
+            }
+            else if (cell3.walled) {
+                this.addWallSegmentCorner(c2, cell2, c3, cell3, c1, cell1);
+            }
+            else {
+                this.addWallSegmentCorner(c1, cell1, c2, cell2, c3, cell3);
+            }
+        }
+        else if (cell2.walled) {
+            if (cell3.walled) {
+                this.addWallSegmentCorner(c1, cell1, c2, cell2, c3, cell3);
+            }
+            else {
+                this.addWallSegmentCorner(c2, cell2, c3, cell3, c1, cell1);
+            }
+        }
+        else if (cell3.walled) {
+            this.addWallSegmentCorner(c3, cell3, c1, cell1, c2, cell2);
+        }
+    }
+    addWallSegment(nearLeft, farLeft, nearRight, farRight) {
+        nearLeft = HexMetrics.perturb(nearLeft);
+        farLeft = HexMetrics.perturb(farLeft);
+        nearRight = HexMetrics.perturb(nearRight);
+        farRight = HexMetrics.perturb(farRight);
+        let left = HexMetrics.wallLerp(nearLeft, farLeft), right = HexMetrics.wallLerp(nearRight, farRight), leftThicknessOffset = HexMetrics.wallThicknessOffset(nearLeft, farLeft), rightThicknessOffset = HexMetrics.wallThicknessOffset(nearRight, farRight), leftTop = left.y + HexMetrics.wallHeight, rightTop = right.y + HexMetrics.wallHeight, v1 = left.clone().subtract(leftThicknessOffset), v3 = left.clone().subtract(leftThicknessOffset), v2 = right.clone().subtract(rightThicknessOffset), v4 = right.clone().subtract(rightThicknessOffset);
+        v3.y = leftTop;
+        v4.y = rightTop;
+        this._walls.addQuadUnperturbed(v1, v2, v3, v4);
+        let t1 = v3.clone(), t2 = v4.clone();
+        v1 = left.add(leftThicknessOffset);
+        v3 = left.add(leftThicknessOffset);
+        v2 = right.add(rightThicknessOffset);
+        v4 = right.add(rightThicknessOffset);
+        v3.y = leftTop;
+        v4.y = rightTop;
+        this._walls.addQuadUnperturbed(v2, v1, v4, v3);
+        this._walls.addQuadUnperturbed(t1, t2, v3, v4);
+    }
+    addWallSegmentCorner(pivot, pivotCell, left, leftCell, right, rightCell) {
+        if (pivotCell.isUnderwater) {
+            return;
+        }
+        let leftWall = !leftCell.isUnderwater && pivotCell.getEdgeTypeForCell(leftCell) !== HexEdgeType.Cliff, rightWall = !rightCell.isUnderwater && pivotCell.getEdgeTypeForCell(rightCell) !== HexEdgeType.Cliff;
+        if (leftWall) {
+            if (rightWall) {
+                this.addWallSegment(pivot, left, pivot, right);
+            }
+            else if (leftCell.elevation < rightCell.elevation) {
+                this.addWallWedge(pivot, left, right);
+            }
+            else {
+                this.addWallCap(pivot, left);
+            }
+        }
+        else if (rightWall) {
+            if (rightCell.elevation < leftCell.elevation) {
+                this.addWallWedge(right, pivot, left);
+            }
+            else {
+                this.addWallCap(right, pivot);
+            }
+        }
+    }
+    addWallCap(near, far) {
+        near = HexMetrics.perturb(near);
+        far = HexMetrics.perturb(far);
+        let center = HexMetrics.wallLerp(near, far), thickness = HexMetrics.wallThicknessOffset(near, far), v1, v2, v3, v4;
+        v1 = center.subtract(thickness);
+        v3 = center.subtract(thickness);
+        v2 = center.add(thickness);
+        v4 = center.add(thickness);
+        v3.y = v4.y = center.y + HexMetrics.wallHeight;
+        this._walls.addQuadUnperturbed(v1, v2, v3, v4);
+    }
+    addWallWedge(near, far, point) {
+        near = HexMetrics.perturb(near);
+        far = HexMetrics.perturb(far);
+        point = HexMetrics.perturb(point);
+        let center = HexMetrics.wallLerp(near, far), thickness = HexMetrics.wallThicknessOffset(near, far), pointTop = point.clone(), v1, v2, v3, v4;
+        point.y = center.y;
+        v1 = center.subtract(thickness);
+        v3 = center.subtract(thickness);
+        v2 = center.add(thickness);
+        v4 = center.add(thickness);
+        v3.y = v4.y = pointTop.y = center.y + HexMetrics.wallHeight;
+        this._walls.addQuadUnperturbed(v1, point, v3, pointTop);
+        this._walls.addQuadUnperturbed(point, v2, pointTop, v4);
+        this._walls.addTriangleUnperturbed(pointTop, v3, v4);
     }
     addFeature(cell, position) {
         let hash = HexMetrics.sampleHashGrid(position);
@@ -1620,7 +1785,8 @@ class HexGridChunk {
         let bridge = HexMetrics.getBridge(direction);
         bridge.y = neighbor.cellPosition.y - cell.cellPosition.y;
         let e2 = EdgeVertices.fromCorners(e1.v1.add(bridge), e1.v5.add(bridge));
-        if (cell.hasRiverThroughEdge(direction)) {
+        let hasRiver = cell.hasRiverThroughEdge(direction), hasRoad = cell.hasRoadThroughEdge(direction);
+        if (hasRiver) {
             e2.v3.y = neighbor.streamBedY;
             if (!cell.isUnderwater) {
                 if (!neighbor.isUnderwater) {
@@ -1635,11 +1801,12 @@ class HexGridChunk {
             }
         }
         if (cell.getEdgeType(direction) === HexEdgeType.Slope) {
-            this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor, cell.hasRoadThroughEdge(direction));
+            this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor, hasRoad);
         }
         else {
-            this.triangulateEdgeStrip(e1, cell.color, e2, neighbor.color, cell.hasRoadThroughEdge(direction));
+            this.triangulateEdgeStrip(e1, cell.color, e2, neighbor.color, hasRoad);
         }
+        this.features.addWall(e1, cell, e2, neighbor, hasRiver, hasRoad);
         let nextNeighborDirection = HexDirection.next(direction), nextNeighbor = cell.getNeighbor(nextNeighborDirection);
         if (direction <= HexDirection.E && nextNeighbor != null) {
             let v5 = e1.v5.add(HexMetrics.getBridge(nextNeighborDirection));
@@ -1693,6 +1860,7 @@ class HexGridChunk {
             this.terrain.addTriangle(bottom, left, right);
             this.terrain.addTriangleColor(bottomCell.color, leftCell.color, rightCell.color);
         }
+        this.features.addWallCorner(bottom, bottomCell, left, leftCell, right, rightCell);
     }
     triangulateCellCornerTerraces(begin, beginCell, left, leftCell, right, rightCell) {
         let v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), c3 = HexMetrics.terraceColorLerp(beginCell.color, leftCell.color, 1), c4 = HexMetrics.terraceColorLerp(beginCell.color, rightCell.color, 1);
@@ -1955,6 +2123,7 @@ var OptionalToggle;
 })(OptionalToggle || (OptionalToggle = {}));
 class HexMapEditor {
     constructor(grid) {
+        this._toolkitPanelOpened = false;
         this.activeColor = null;
         this.activeElevation = 0.0;
         this.activeWaterLevel = 0.0;
@@ -1969,59 +2138,95 @@ class HexMapEditor {
         this.brushSize = 0;
         this.riverMode = OptionalToggle.Ignore;
         this.roadMode = OptionalToggle.Ignore;
+        this.walledMode = OptionalToggle.Ignore;
         this.isPointerDown = false;
         this.isDrag = false;
         this.grid = grid;
-        this.activeColor = HexCellColor.default();
-        this.makeSelectionPanel();
+        this.makePanel();
     }
-    makeSelectionPanel() {
-        this.advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
-        // this.scrollViewer = new BABYLON.GUI.ScrollViewer();
-        this.selectionPanel = new BABYLON.GUI.SelectionPanel("ui_editor");
-        // this.advancedTexture.addControl(this.scrollViewer);
-        this.selectionPanel.width = 0.15;
-        this.selectionPanel.height = 0.9;
-        this.selectionPanel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
-        this.selectionPanel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
-        this.selectionPanel.background = "#336699";
-        this.selectionPanel.isPointerBlocker = true;
-        this.selectionPanel.onPointerClickObservable.add((eventData, eventState) => {
-            // NOTE: THIS STATIC VALUE IS RESET AT THE END OF RENDER LOOP (scene.registerAfterRender). FIX THIS.
-            HexMapEditor.POINTER_BLOCKED_BY_GUI = true;
+    static enumToSelectList(enumerable) {
+        let names = Object.keys(enumerable).filter(k => typeof enumerable[k] === 'number');
+        return names.map(name => {
+            return { label: name, value: enumerable[name] };
         });
-        this.advancedTexture.addControl(this.selectionPanel);
-        const colorGroup = new BABYLON.GUI.RadioGroup("Color"), elevationGroup = new BABYLON.GUI.CheckboxGroup("Elevation"), riverGroup = new BABYLON.GUI.RadioGroup("River"), roadGroup = new BABYLON.GUI.RadioGroup("Road"), slidersGroup = new BABYLON.GUI.SliderGroup("Values");
-        // Colors.
-        HexMapEditor.COLORS.forEach(colorOption => {
-            colorGroup.addRadio(colorOption.label, this.setActiveColor.bind(this), this.activeColor === colorOption.color);
+    }
+    showPanel() {
+        this._toolkitPanelOpened = true;
+        this._toolkitPanel.style.webkitTransform = 'translateX(17em)';
+        this._toolkitPanel.style.transform = 'translateX(17em)';
+    }
+    hidePanel() {
+        this._toolkitPanelOpened = false;
+        this._toolkitPanel.style.webkitTransform = 'translateX(0px)';
+        this._toolkitPanel.style.transform = 'translateX(0px)';
+    }
+    makePanel() {
+        this._toolkitPanel = document.getElementById('guiPanel');
+        this._toolkitPanelToogle = document.getElementById('guiClickableTag');
+        this._toolkitPanelContainer = document.getElementById('guiPanelContainer');
+        this._toolkitPanelToogle.addEventListener('click', () => {
+            if (this._toolkitPanelOpened) {
+                this.hidePanel();
+            }
+            else {
+                this.showPanel();
+            }
         });
-        // Tool checkboxes.
-        elevationGroup.addCheckbox("Elevation", this.toggleElevation.bind(this), this.isElevationSelected);
-        elevationGroup.addCheckbox("Water Level", this.toggleWaterLevel.bind(this), this.isWaterLevelSelected);
-        elevationGroup.addCheckbox("Urban Level", this.toggleUrbanLevel.bind(this), this.isUrbanLevelSelected);
-        elevationGroup.addCheckbox("Farm Level", this.toggleFarmLevel.bind(this), this.isFarmLevelSelected);
-        elevationGroup.addCheckbox("Plant Level", this.togglePlantLevel.bind(this), this.isPlantLevelSelected);
-        // River
-        riverGroup.addRadio(OptionalToggle[OptionalToggle.Ignore], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.Ignore);
-        riverGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.Yes);
-        riverGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRiverMode.bind(this), this.riverMode === OptionalToggle.No);
-        // Road
-        roadGroup.addRadio(OptionalToggle[OptionalToggle.Ignore], this.setRoadMode.bind(this), this.roadMode === OptionalToggle.Ignore);
-        roadGroup.addRadio(OptionalToggle[OptionalToggle.Yes], this.setRoadMode.bind(this), this.roadMode === OptionalToggle.Yes);
-        roadGroup.addRadio(OptionalToggle[OptionalToggle.No], this.setRoadMode.bind(this), this.roadMode === OptionalToggle.No);
-        // Tool sliders.
-        slidersGroup.addSlider("Elevation", this.setElevation.bind(this), "unit", 0, 7, this.activeElevation, (v) => ~~v);
-        slidersGroup.addSlider("Water Level", this.setWaterLevel.bind(this), "unit", 0, 7, this.activeWaterLevel, (v) => ~~v);
-        slidersGroup.addSlider("Urban Level", this.setUrbanLevel.bind(this), "unit", 0, 3, this.activeUrbanLevel, (v) => ~~v);
-        slidersGroup.addSlider("Farm Level", this.setFarmLevel.bind(this), "unit", 0, 3, this.activeFarmLevel, (v) => ~~v);
-        slidersGroup.addSlider("Plant Level", this.setPlantLevel.bind(this), "unit", 0, 3, this.activePlantLevel, (v) => ~~v);
-        slidersGroup.addSlider("Brush size", this.setBrushSize.bind(this), "cell", 0, 4, this.brushSize, (v) => ~~v);
-        this.selectionPanel.addGroup(colorGroup);
-        this.selectionPanel.addGroup(riverGroup);
-        this.selectionPanel.addGroup(roadGroup);
-        this.selectionPanel.addGroup(elevationGroup);
-        this.selectionPanel.addGroup(slidersGroup);
+        this.addPanelSelect("Color", HexMapEditor.COLORS, this.setActiveColor.bind(this));
+        this.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
+        this.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
+        this.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
+        this.addPanelToggleSlider("Elevation", 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
+        this.addPanelToggleSlider("Water level", 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
+        this.addPanelToggleSlider("Urban level", 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
+        this.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
+        this.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
+        this.addPanelToggleSlider("Brush", 0, 4, 0, () => { }, this.setBrushSize.bind(this));
+    }
+    addPanelSelect(label, options, callbackFn) {
+        let group = document.createElement('div'), groupLabel = document.createElement('label'), select = document.createElement('select');
+        groupLabel.innerHTML = label + ': ';
+        options.forEach((o) => {
+            let opt = document.createElement('option');
+            opt.value = o.value;
+            opt.innerText = o.label;
+            select.append(opt);
+        });
+        group.onchange = (changeEvent) => {
+            let idx = changeEvent.srcElement.selectedIndex;
+            callbackFn(changeEvent.srcElement[idx].value);
+        };
+        group.appendChild(groupLabel);
+        group.appendChild(select);
+        this._toolkitPanelContainer.appendChild(group);
+        this._toolkitPanelContainer.appendChild(document.createElement('hr'));
+    }
+    addPanelToggleSlider(label, minVal, maxVal, defaultVal, toggleCallbackFn, valueChangeCallbackFn) {
+        let group = document.createElement('div'), groupLabel = document.createElement('label'), toggle = document.createElement('input'), slider = document.createElement('input'), formatLabel = (v) => { return `${label} (${v})<br>`; };
+        groupLabel.innerHTML = formatLabel(defaultVal);
+        toggle.type = 'checkbox';
+        toggle.value = '';
+        toggle.onclick = (event) => {
+            toggleCallbackFn(event.srcElement.checked);
+        };
+        slider.type = 'range';
+        slider.min = `${minVal}`;
+        slider.max = `${maxVal}`;
+        slider.value = `${defaultVal}`;
+        slider.onchange = (event) => {
+            let v = event.srcElement.value;
+            groupLabel.innerHTML = formatLabel(v);
+            valueChangeCallbackFn(parseInt(v));
+        };
+        slider.oninput = (event) => {
+            let v = event.srcElement.value;
+            groupLabel.innerHTML = formatLabel(v);
+        };
+        group.appendChild(toggle);
+        group.appendChild(groupLabel);
+        group.appendChild(slider);
+        this._toolkitPanelContainer.appendChild(group);
+        this._toolkitPanelContainer.appendChild(document.createElement('hr'));
     }
     attachCameraControl(camera) {
         this._scene = camera.getScene();
@@ -2083,7 +2288,7 @@ class HexMapEditor {
         if (!cell) {
             return;
         }
-        if (this.activeColor !== null) {
+        if (this.activeColor != null) {
             cell.color = this.activeColor;
         }
         if (this.isElevationSelected) {
@@ -2106,6 +2311,9 @@ class HexMapEditor {
         }
         if (this.roadMode === OptionalToggle.No) {
             cell.removeRoads();
+        }
+        if (this.walledMode != OptionalToggle.Ignore) {
+            cell.walled = this.walledMode === OptionalToggle.Yes;
         }
         if (this.isDrag) {
             let otherCell = cell.getNeighbor(HexDirection.opposite(this.dragDirection));
@@ -2133,12 +2341,8 @@ class HexMapEditor {
         }
     }
     setActiveColor(color) {
-        if (color === 0) {
-            this.activeColor = null;
-        }
-        else {
-            this.activeColor = HexMapEditor.COLORS[color].color;
-        }
+        let clr = color in HexCellColor ? HexCellColor[color] : null;
+        this.activeColor = clr;
     }
     setElevation(elevation) {
         this.activeElevation = Math.floor(elevation);
@@ -2174,18 +2378,30 @@ class HexMapEditor {
         this.activePlantLevel = ~~level;
     }
     setRiverMode(mode) {
-        this.riverMode = mode;
+        if (!OptionalToggle[mode]) {
+            console.error('Invalid river mode.');
+        }
+        this.riverMode = parseInt(mode);
     }
     setRoadMode(mode) {
-        this.roadMode = mode;
+        if (!OptionalToggle[mode]) {
+            console.error('Invalid road mode.');
+        }
+        this.roadMode = parseInt(mode);
+    }
+    setWalledMode(mode) {
+        if (!OptionalToggle[mode]) {
+            console.error('Invalid walled mode.');
+        }
+        this.walledMode = parseInt(mode);
     }
 }
 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;
 HexMapEditor.COLORS = [
-    { label: "--", color: null },
-    { label: "White", color: HexCellColor.WHITE },
-    { label: "Blue", color: HexCellColor.PASTEL_BLUE },
-    { label: "Yellow", color: HexCellColor.PASTEL_YELLOW },
-    { label: "Green", color: HexCellColor.PASTEL_GREEN },
-    { label: "Orange", color: HexCellColor.PASTEL_ORANGE }
+    { label: "--", value: null },
+    { label: "White", value: 'WHITE' },
+    { label: "Blue", value: 'PASTEL_BLUE' },
+    { label: "Yellow", value: 'PASTEL_YELLOW' },
+    { label: "Green", value: 'PASTEL_GREEN' },
+    { label: "Orange", value: 'PASTEL_ORANGE' }
 ];

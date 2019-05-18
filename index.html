@@ -22,6 +22,8 @@
             height  : 100%;
             margin  : 0;
             padding : 0;
+            overflow: hidden;
+            position: fixed;
         }
     
         #renderCanvas {
@@ -29,10 +31,73 @@
             height  : 100%;
             touch-action: none;
         }
+        .guiTag {
+            position: absolute;
+            background-color: #EEEEEE;
+            height: 50px;
+            width: 50px;
+            top: 0px;
+            left: -50px;
+            border-top-left-radius: 10px 10px;
+            border-bottom-left-radius: 10px 10px;
+            z-index: 100;
+        }
+        #guiClickableTag {
+            cursor: hand;
+            background-color: transparent;
+        }
+        #guiPanel {
+            position: absolute;
+            right: 0px;
+            width: 17em;
+            top: 2em;
+            z-index: 10;
+            transition: transform 0.25s ease-in-out;
+            transform: translateX(17em);
+            -webkit-transition: -webkit-transform 0.25s ease-in-out;
+            -webkit-transform: translateX(17em);
+        }
+        #guiPanelContainer {
+            width: 100%;
+            height: 100%;
+            background-color: #EEEEEE;
+            color: #888888;
+            padding: 20px;
+            border-bottom-left-radius: 10px 10px;
+        }
+        .buttonControlPanel {
+            height: 3em;
+            width: 17em;
+            margin: 5px 0px 5px 0px;
+            line-height: 2.2em;
+        }
+        button {
+            border: 1px solid #888888;
+            background-color: #DEDEDE;
+            color: #888888;
+        }
+        button:hover {
+            background-color: #EEEEEE;
+        }
+        button:active {
+            transform: scale(0.98);
+            -webkit-transform: scale(0.98);
+        }
+        input[type=range]::-moz-range-progress {
+            background-color: green;
+            height: 1em;
+        }
     </style>
 </head>
 <body>
     <canvas id="renderCanvas"></canvas>
+
+    <div id="guiPanel">
+        <div id="guiPanelContainer">
+        </div>
+        <div class="guiTag"><img src="assets/gfx/edit.png" width="48px"></div>
+        <div class="guiTag" id="guiClickableTag"></div>
+    </div>
     <script type="text/javascript">
         window.addEventListener('DOMContentLoaded', () => {
             // Create the game using the 'renderCanvas'.
