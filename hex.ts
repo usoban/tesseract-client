@@ -40,6 +40,7 @@ class HexMetrics {
     public static wallElevationOffset: number = HexMetrics.verticalTerraceStepSize;
     public static wallTowerThreshold: number = 0.5;
     public static wallYOffset: number = -1.0;
+    public static bridgeDesignLength = 7.0;
 
     private static corners: Array<BABYLON.Vector3> = [
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
@@ -440,6 +441,7 @@ class Prefabs {
     private static _plantFeatureMaterial: BABYLON.StandardMaterial;
     private static _wallsMaterial: BABYLON.PBRMaterial;
     private static _towerMaterial: BABYLON.PBRMaterial;
+    private static _bridgeMaterial: BABYLON.PBRMaterial;
 
     private static _foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
@@ -771,9 +773,9 @@ class Prefabs {
 
     private static urbanFeatureMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._urbanFeatureMaterial) {
-            Prefabs._urbanFeatureMaterial = new BABYLON.StandardMaterial("feature_material", scene);
+            Prefabs._urbanFeatureMaterial = new BABYLON.StandardMaterial("urban_material", scene);
             Prefabs._urbanFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#c8272e");
-            Prefabs._urbanFeatureMaterial.emissiveColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._urbanFeatureMaterial.emissiveColor = BABYLON.Color3.Black();
             Prefabs._urbanFeatureMaterial.specularColor = BABYLON.Color3.Black();
         }
 
@@ -782,9 +784,9 @@ class Prefabs {
 
     private static farmFeatureMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._farmFeatureMaterial) {
-            Prefabs._farmFeatureMaterial = new BABYLON.StandardMaterial("feature_material", scene);
-            Prefabs._farmFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#acdd20");
-            Prefabs._farmFeatureMaterial.emissiveColor = BABYLON.Color3.FromHexString("#acdd20");
+            Prefabs._farmFeatureMaterial = new BABYLON.StandardMaterial("farm_material", scene);
+            Prefabs._farmFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#15D700");
+            Prefabs._farmFeatureMaterial.emissiveColor = BABYLON.Color3.Black();
             Prefabs._farmFeatureMaterial.specularColor = BABYLON.Color3.Black();
         }
 
@@ -793,9 +795,9 @@ class Prefabs {
     
     private static plantFeatureMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._plantFeatureMaterial) {
-            Prefabs._plantFeatureMaterial = new BABYLON.StandardMaterial("feature_material", scene);
+            Prefabs._plantFeatureMaterial = new BABYLON.StandardMaterial("plant_material", scene);
             Prefabs._plantFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#2e8923");
-            Prefabs._plantFeatureMaterial.emissiveColor = BABYLON.Color3.FromHexString("#2e8923");
+            Prefabs._plantFeatureMaterial.emissiveColor = BABYLON.Color3.Black();
             Prefabs._plantFeatureMaterial.specularColor = BABYLON.Color3.Black();
         }
 
@@ -824,6 +826,18 @@ class Prefabs {
         }
 
         return Prefabs._towerMaterial;
+    }
+
+    private static bridgeMaterial(scene: BABYLON.Scene): BABYLON.Material {
+        if (!Prefabs._bridgeMaterial) {
+            Prefabs._bridgeMaterial = new BABYLON.PBRMaterial("bridge_material", scene);
+            Prefabs._bridgeMaterial.sideOrientation = BABYLON.Orientation.CCW;
+            Prefabs._bridgeMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._bridgeMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._bridgeMaterial.metallic = 0;
+        }
+
+        return Prefabs._bridgeMaterial;
     }
 
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
@@ -963,6 +977,62 @@ class Prefabs {
 
         return tower;
     }
+
+    public static bridge(name: string, scene: BABYLON.Scene): BABYLON.Mesh {
+        let 
+            bridge = BABYLON.MeshBuilder.CreateBox(
+                name, 
+                {
+                    width: 3, 
+                    height: 1, 
+                    depth: HexMetrics.bridgeDesignLength
+                }, 
+                scene
+            );
+
+        bridge.isVisible = true;
+        bridge.isPickable = false;
+        bridge.material = Prefabs.bridgeMaterial(scene);
+
+        return bridge;
+    }
+
+    public static castle(_opts: any, name: string, scene: BABYLON.Scene): BABYLON.Mesh {
+        let
+            base = BABYLON.MeshBuilder.CreateBox(`${name}_base`, {width: 6, height: 4, depth: 6}, scene),
+            t1 = BABYLON.MeshBuilder.CreateBox(`${name}_tower1`, {width: 2, height: 6, depth: 2}, scene),
+            t2 = BABYLON.MeshBuilder.CreateBox(`${name}_tower2`, {width: 2, height: 6, depth: 2}, scene),
+            t3 = BABYLON.MeshBuilder.CreateBox(`${name}_tower3`, {width: 2, height: 6, depth: 2}, scene),
+            t4 = BABYLON.MeshBuilder.CreateBox(`${name}_tower4`, {width: 2, height: 6, depth: 2}, scene);
+
+        XMesh.fixInitialPosition(base);
+        XMesh.fixInitialPosition(t1);
+        XMesh.fixInitialPosition(t2);
+        XMesh.fixInitialPosition(t3);
+        XMesh.fixInitialPosition(t4);
+
+        t1.setParent(base);
+        t2.setParent(base);
+        t3.setParent(base);
+        t4.setParent(base);
+
+        t1.position.x = -2.5;
+        t1.position.z = 2.5;
+        t2.position.x = -2.5;
+        t2.position.z = -2.5;
+        t3.position.x = 2.5;
+        t3.position.z = 2.5;    
+        t4.position.x = 2.5;
+        t4.position.z = -2.5;
+
+        let castle = BABYLON.Mesh.MergeMeshes([base, t1, t2, t3, t4]);
+
+        castle.isVisible = true;
+        castle.isPickable = false;
+        castle.material = Prefabs.urbanFeatureMaterial(scene);
+
+        return castle;
+    }
 }
 
 class XQuaternion {
@@ -989,27 +1059,89 @@ class XQuaternion {
             2 * (q.x * q.z - q.w * q.y)
         );
     }
+
+    /**
+     * Source: https://bitbucket.org/sinbad/ogre/src/9db75e3ba05c/OgreMain/include/OgreVector3.h#cl-651
+     */
+    public static getRotationTo(
+        vector: BABYLON.Vector3, 
+        destination: BABYLON.Vector3,
+        fallbackAxis: BABYLON.Vector3 = BABYLON.Vector3.Zero()
+    ): BABYLON.Quaternion {
+        let q = new BABYLON.Quaternion(),
+            // v0 = vector.clone(),
+            // v1 = destination.clone(),
+            d: number;
+        
+        BABYLON.Tmp.Vector3[0] = vector.clone();
+        BABYLON.Tmp.Vector3[1] = destination.clone();
+
+        BABYLON.Tmp.Vector3[0].normalize();
+        BABYLON.Tmp.Vector3[1].normalize();
+
+        d = BABYLON.Vector3.Dot(BABYLON.Tmp.Vector3[0], BABYLON.Tmp.Vector3[1]);
+        
+        if (d >= 1.0) {
+            return BABYLON.Quaternion.Identity();
+        }
+
+        if (d < (1e-6 - 1.0)) {
+            if (fallbackAxis !== BABYLON.Vector3.Zero()) {
+                BABYLON.Quaternion.RotationAxisToRef(fallbackAxis, Math.PI, q);
+            }
+            else {
+                let axis = BABYLON.Vector3.Cross(BABYLON.Vector3.Right(), vector);
+
+                if (axis.length() === 0) {
+                    axis = BABYLON.Vector3.Cross(BABYLON.Vector3.Up(), vector);
+                }
+
+                axis.normalize();
+                BABYLON.Quaternion.RotationAxisToRef(axis, Math.PI, q);
+            }
+        }
+        else {
+            let
+                s = Math.sqrt((1 + d) * 2),
+                invs = 1/s,
+                c = BABYLON.Vector3.Cross(BABYLON.Tmp.Vector3[0], BABYLON.Tmp.Vector3[1]);
+
+            q.x = c.x * invs;
+            q.y = c.y * invs;
+            q.z = c.z * invs;
+            q.w = s * 0.5;
+
+            q.normalize();
+        }
+
+        return q;
+    }
 }
 
 class XMesh {
-    public static setAxisRight(mesh: BABYLON.Mesh, axis: BABYLON.Vector3) {
-        let 
-            eulerAngles = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z),
-            currentRightVector = XQuaternion.getRightVector(eulerAngles);
+    public static fixInitialPosition(mesh: BABYLON.Mesh): void {
+        mesh.position.y += mesh.getBoundingInfo().boundingBox.extendSize.y;
+    }
 
-        let w1 = axis.clone(), w2 = currentRightVector.clone();
+    public static setAxisRight(mesh: BABYLON.Mesh, axis: BABYLON.Vector3): void {
+        XMesh.setAxisVector(mesh, axis, XQuaternion.getRightVector);
+    }
 
-        w1.y = 0;
-        w2.y = 0;
-        w1.normalize();
-        w2.normalize();
+    public static setAxisForward(mesh: BABYLON.Mesh, axis: BABYLON.Vector3): void {
+        XMesh.setAxisVector(mesh, axis, XQuaternion.getForwardVector);
+    }
 
+    private static setAxisVector(mesh: BABYLON.Mesh, axis: BABYLON.Vector3, getAxisFN): void {
         let
-            angle = Math.acos(BABYLON.Vector3.Dot(w1, w2)),
-            newAxis = BABYLON.Vector3.Cross(w1, w2),
-            quart = BABYLON.Quaternion.RotationAxis(newAxis, angle);
+            rot = mesh.rotation,
+            eulerAngles = BABYLON.Quaternion.FromEulerAngles(rot.x, rot.y, rot.z),
+            currentAxis = getAxisFN(eulerAngles).clone(),
+            destination = axis.clone();
 
-        mesh.rotationQuaternion = quart;
+        currentAxis.y = 0;
+        destination.y = 0;
+
+        mesh.rotationQuaternion = XQuaternion.getRotationTo(currentAxis, destination);
     }
 }
 
@@ -1036,6 +1168,7 @@ class HexCell extends BABYLON.Mesh {
     private _farmLevel: number = 0;
     private _plantLevel: number = 0;
     private _walled: boolean = false;
+    private _specialIndex: number = 0;
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -1169,10 +1302,12 @@ class HexCell extends BABYLON.Mesh {
 
         this._hasOutgoingRiver = true;
         this._outgoingRiver = direction;
+        this._specialIndex = 0;
 
         neighbor.removeIncomingRiver();
         neighbor._hasIncomingRiver = true;
         neighbor._incomingRiver = HexDirection.opposite(direction);
+        neighbor._specialIndex = 0;
 
         this.setRoad(direction, false);
     }
@@ -1258,6 +1393,8 @@ class HexCell extends BABYLON.Mesh {
         if (
             !this.roads[direction] && 
             !this.hasRiverThroughEdge(direction) &&
+            !this.isSpecial &&
+            !this.getNeighbor(direction).isSpecial &&
             this.getElevationDifference(direction) <= 1
         ) {
             this.setRoad(direction, true);
@@ -1339,6 +1476,24 @@ class HexCell extends BABYLON.Mesh {
 
         this._walled = value;
         this.refresh();
+    }
+
+    public get specialIndex(): number {
+        return this._specialIndex;
+    }
+
+    public set specialIndex(value: number) {
+        if (this._specialIndex === value || this.hasRiver) {
+            return;
+        }
+
+        this._specialIndex = value;
+        this.removeRoads();
+        this.refreshSelfOnly();
+    }
+
+    public get isSpecial(): boolean {
+        return this._specialIndex > 0;
     }
 
     public getEdgeType(direction: HexDirection): HexEdgeType {
@@ -1696,6 +1851,10 @@ class HexFeatureCollection {
         ])
     ];
 
+    public static specialFeatures: HexFeatureCollection[] = [
+        new HexFeatureCollection(Prefabs.castle, ["castle_1"])
+    ];
+
     private _prefabFn: (name: string, args: any, scene: BABYLON.Scene) => BABYLON.Mesh;
     private _prefabArgs: any[];
 
@@ -1932,7 +2091,27 @@ class HexFeatureManager {
         this._walls.addTriangleUnperturbed(pointTop, v3, v4);
     }
 
+    public addBridge(roadCenter1: BABYLON.Vector3, roadCenter2: BABYLON.Vector3): void {
+        let instance = Prefabs.bridge("bridge", this._scene);
+
+        roadCenter1 = HexMetrics.perturb(roadCenter1);
+        roadCenter2 = HexMetrics.perturb(roadCenter2);
+
+        instance.position = roadCenter1.add(roadCenter2).scale(0.5);
+        XMesh.setAxisForward(instance, roadCenter2.subtract(roadCenter1));
+
+        let length = BABYLON.Vector3.Distance(roadCenter1, roadCenter2);
+
+        instance.scaling = new BABYLON.Vector3(1, 1, length * (1 / HexMetrics.bridgeDesignLength));
+
+        instance.setParent(this._container);
+    }
+
     public addFeature(cell: HexCell, position: BABYLON.Vector3): void {
+        if (cell.isSpecial) {
+            return;
+        }
+
         let hash = HexMetrics.sampleHashGrid(position)
 
         let instance = this.pickPrefab(
@@ -1958,6 +2137,8 @@ class HexFeatureManager {
                 instance = otherInstance;
                 usedHash = hash.b;
                 tmp.dispose();
+            } else if (otherInstance) {
+                otherInstance.dispose();
             }
         }
         else if (otherInstance) {
@@ -1978,6 +2159,8 @@ class HexFeatureManager {
                 let tmp = instance;
                 instance = otherInstance;
                 tmp.dispose();
+            } else if (otherInstance) {
+                otherInstance.dispose();
             }
         }
         else if (otherInstance) {
@@ -1991,6 +2174,18 @@ class HexFeatureManager {
         instance.position.y += instance.getBoundingInfo().boundingBox.extendSize.y;
         instance.position = HexMetrics.perturb(instance.position);
         instance.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, 360.0 * hash.e, 0);
+        instance.setParent(this._container);
+    }
+
+    public addSpecialFeature(cell: HexCell, position: BABYLON.Vector3): void {
+        let instance = HexFeatureCollection.specialFeatures[cell.specialIndex - 1].pickAndMake(1, "special_feature", this._scene);
+
+        instance.position = HexMetrics.perturb(position);
+
+        let hash = HexMetrics.sampleHashGrid(position);
+
+        instance.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, 360.0 * hash.e, 0);
+
         instance.setParent(this._container);
     }
 
@@ -2060,8 +2255,14 @@ class HexGridChunk {
                 this.triangulateCell(direction, cell);
             }
 
-            if (!cell.isUnderwater && !cell.hasRiver && !cell.hasRoads) {
-                this.features.addFeature(cell, cell.cellPosition);
+            if (!cell.isUnderwater) {
+                if (!cell.hasRiver && !cell.hasRoads) {
+                    this.features.addFeature(cell, cell.cellPosition);
+                }                
+
+                if (cell.isSpecial) {
+                    this.features.addSpecialFeature(cell, cell.cellPosition);
+                }
             }
         }
 
@@ -2482,6 +2683,15 @@ class HexGridChunk {
             }
 
             roadCenter = roadCenter.add(corner.scale(0.5));
+            if (
+                cell.incomingRiver === HexDirection.next(direction) && 
+                (
+                    cell.hasRoadThroughEdge(HexDirection.next2(direction)) ||
+                    cell.hasRoadThroughEdge(HexDirection.opposite(direction))
+                )
+            ) {
+                this.features.addBridge(roadCenter, center.subtract(corner.scale(0.5)));
+            }
             center = center.add(corner.scale(0.25));
         }
         else if (cell.incomingRiver === HexDirection.previous(cell.outgoingRiver)) {
@@ -2521,7 +2731,16 @@ class HexGridChunk {
                 return;
             }
 
-            roadCenter = roadCenter.add(HexMetrics.getSolidEdgeMiddle(middle).scale(0.25));
+            let offset = HexMetrics.getSolidEdgeMiddle(middle);
+            
+            roadCenter = roadCenter.add(offset.scale(0.25));
+
+            if (direction === middle && cell.hasRoadThroughEdge(HexDirection.opposite(direction))) {
+                this.features.addBridge(
+                    roadCenter,
+                    center.subtract(offset.scale(HexMetrics.innerToOuter * 0.7))
+                );
+            }
         }
 
         let
@@ -3175,12 +3394,14 @@ class HexMapEditor {
     private activeUrbanLevel: number = 0.0;
     private activeFarmLevel: number = 0.0;
     private activePlantLevel: number = 0.0;
+    private activeSpecialIndex: number = 0;
 
     private isElevationSelected: boolean = false;
     private isWaterLevelSelected: boolean = false;
     private isUrbanLevelSelected: boolean = false;
     private isFarmLevelSelected: boolean = false;
     private isPlantLevelSelected: boolean = false;
+    private isSpecialIndexSelected: boolean = false;
 
     private brushSize: number = 0;
     private riverMode: OptionalToggle = OptionalToggle.Ignore;
@@ -3238,6 +3459,7 @@ class HexMapEditor {
         this.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
         this.addPanelToggleSlider("Elevation", 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
         this.addPanelToggleSlider("Water level", 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
+        this.addPanelToggleSlider("Special", 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
         this.addPanelToggleSlider("Urban level", 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
         this.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
         this.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
@@ -3404,6 +3626,10 @@ class HexMapEditor {
             cell.waterLevel = this.activeWaterLevel;
         }
 
+        if (this.isSpecialIndexSelected) {
+            cell.specialIndex = this.activeSpecialIndex;
+        }
+
         if (this.isUrbanLevelSelected) {
             cell.urbanLevel = this.activeUrbanLevel;
         }
@@ -3507,6 +3733,14 @@ class HexMapEditor {
 
     setPlantLevel(level: number): void {
         this.activePlantLevel = ~~level;
+    }
+
+    toggleSpecialIndex(state: boolean): void {
+        this.isSpecialIndexSelected = state;
+    }
+
+    setSpecialIndex(index: number): void {
+        this.activeSpecialIndex = ~~index;
     }
 
     setRiverMode(mode: string): void {
