@@ -100,7 +100,7 @@ class HexMetrics {
         let v = (near.y < far.y
             ? HexMetrics.wallElevationOffset
             : (1.0 - HexMetrics.wallElevationOffset));
-        near.y += (far.y - near.y) * v;
+        near.y += (far.y - near.y) * v + HexMetrics.wallYOffset;
         return near;
     }
 }
@@ -132,9 +132,11 @@ HexMetrics.featureThresholds = [
     [0.0, 0.4, 0.6],
     [0.4, 0.6, 0.8]
 ];
-HexMetrics.wallHeight = 3.0;
+HexMetrics.wallHeight = 4.0;
 HexMetrics.wallThickness = 0.75;
 HexMetrics.wallElevationOffset = HexMetrics.verticalTerraceStepSize;
+HexMetrics.wallTowerThreshold = 0.5;
+HexMetrics.wallYOffset = -1.0;
 HexMetrics.corners = [
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
     new BABYLON.Vector3(HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
@@ -555,6 +557,16 @@ class Prefabs {
         }
         return Prefabs._wallsMaterial;
     }
+    static towerMaterial(scene) {
+        if (!Prefabs._towerMaterial) {
+            Prefabs._towerMaterial = new BABYLON.PBRMaterial("tower_material", scene);
+            // Prefabs._towerMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._towerMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._towerMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._towerMaterial.metallic = 0;
+        }
+        return Prefabs._towerMaterial;
+    }
     static terrain(name, scene) {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
@@ -643,7 +655,18 @@ class Prefabs {
         walls._useColors = false;
         walls._useCollider = false;
         walls._useUVCoordinates = false;
+        walls.alphaIndex = 150;
         return walls;
+    }
+    static wallTower(name, scene) {
+        let box1 = BABYLON.MeshBuilder.CreateBox(`${name}_base`, { width: 2, height: 5, depth: 2 }, scene), box2 = BABYLON.MeshBuilder.CreateBox(`${name}_top`, { size: 1 }, scene);
+        box2.setParent(box1);
+        box2.locallyTranslate(new BABYLON.Vector3(0, 2.5, 0));
+        let tower = BABYLON.Mesh.MergeMeshes([box1, box2], true);
+        tower.isVisible = true;
+        tower.isPickable = false;
+        tower.material = Prefabs.towerMaterial(scene);
+        return tower;
     }
 }
 Prefabs._foamShaderFn = `
@@ -705,6 +728,29 @@ Prefabs._riverShaderFn = `
             return noise.x * noise2.w;
         }
     `;
+class XQuaternion {
+    static getForwardVector(q) {
+        return new BABYLON.Vector3(2 * (q.x * q.z + q.w * q.y), 2 * (q.y * q.x - q.w * q.x), 1 - 2 * (q.x * q.x + q.y * q.y));
+    }
+    static getUpVector(q) {
+        return new BABYLON.Vector3(2 * (q.x * q.y - q.w * q.z), 1 - 2 * (q.x * q.x + q.z * q.z), 2 * (q.y * q.z + q.w * q.x));
+    }
+    static getRightVector(q) {
+        return new BABYLON.Vector3(1 - 2 * (q.y * q.y + q.z * q.z), 2 * (q.x * q.y + q.w * q.z), 2 * (q.x * q.z - q.w * q.y));
+    }
+}
+class XMesh {
+    static setAxisRight(mesh, axis) {
+        let eulerAngles = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z), currentRightVector = XQuaternion.getRightVector(eulerAngles);
+        let w1 = axis.clone(), w2 = currentRightVector.clone();
+        w1.y = 0;
+        w2.y = 0;
+        w1.normalize();
+        w2.normalize();
+        let angle = Math.acos(BABYLON.Vector3.Dot(w1, w2)), newAxis = BABYLON.Vector3.Cross(w1, w2), quart = BABYLON.Quaternion.RotationAxis(newAxis, angle);
+        mesh.rotationQuaternion = quart;
+    }
+}
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!!
  */
@@ -1019,7 +1065,7 @@ class HexMesh extends BABYLON.Mesh {
     }
     apply() {
         let vertexData = new BABYLON.VertexData(), normals = [];
-        BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals);
+        BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals, { useRightHandedSystem: true });
         vertexData.positions = this._vertices;
         vertexData.indices = this._triangles;
         vertexData.normals = normals;
@@ -1296,7 +1342,7 @@ class HexFeatureManager {
             this.addWallSegmentCorner(c3, cell3, c1, cell1, c2, cell2);
         }
     }
-    addWallSegment(nearLeft, farLeft, nearRight, farRight) {
+    addWallSegment(nearLeft, farLeft, nearRight, farRight, addTower = false) {
         nearLeft = HexMetrics.perturb(nearLeft);
         farLeft = HexMetrics.perturb(farLeft);
         nearRight = HexMetrics.perturb(nearRight);
@@ -1314,6 +1360,14 @@ class HexFeatureManager {
         v4.y = rightTop;
         this._walls.addQuadUnperturbed(v2, v1, v4, v3);
         this._walls.addQuadUnperturbed(t1, t2, v3, v4);
+        if (addTower) {
+            // TODO: simplify?
+            let towerInstance = Prefabs.wallTower(`tower`, this._scene);
+            towerInstance.setParent(this._container);
+            towerInstance.position = left.add(right).scale(0.5);
+            towerInstance.position.y += towerInstance.getBoundingInfo().boundingBox.extendSize.y * 0.5 + 1;
+            XMesh.setAxisRight(towerInstance, right.subtract(left));
+        }
     }
     addWallSegmentCorner(pivot, pivotCell, left, leftCell, right, rightCell) {
         if (pivotCell.isUnderwater) {
@@ -1322,7 +1376,12 @@ class HexFeatureManager {
         let leftWall = !leftCell.isUnderwater && pivotCell.getEdgeTypeForCell(leftCell) !== HexEdgeType.Cliff, rightWall = !rightCell.isUnderwater && pivotCell.getEdgeTypeForCell(rightCell) !== HexEdgeType.Cliff;
         if (leftWall) {
             if (rightWall) {
-                this.addWallSegment(pivot, left, pivot, right);
+                let hasTower = false;
+                if (leftCell.elevation === rightCell.elevation) {
+                    let hash = HexMetrics.sampleHashGrid(pivot.add(left).add(right).scale(1 / 3));
+                    hasTower = hash.e < HexMetrics.wallTowerThreshold;
+                }
+                this.addWallSegment(pivot, left, pivot, right, hasTower);
             }
             else if (leftCell.elevation < rightCell.elevation) {
                 this.addWallWedge(pivot, left, right);

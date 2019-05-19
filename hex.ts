@@ -35,9 +35,11 @@ class HexMetrics {
         [0.0, 0.4, 0.6],
         [0.4, 0.6, 0.8]
     ];
-    public static wallHeight: number = 3.0;
+    public static wallHeight: number = 4.0;
     public static wallThickness: number = 0.75;
     public static wallElevationOffset: number = HexMetrics.verticalTerraceStepSize;
+    public static wallTowerThreshold: number = 0.5;
+    public static wallYOffset: number = -1.0;
 
     private static corners: Array<BABYLON.Vector3> = [
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius),
@@ -194,7 +196,7 @@ class HexMetrics {
             : (1.0 - HexMetrics.wallElevationOffset)
         );
 
-        near.y += (far.y - near.y) * v;
+        near.y += (far.y - near.y) * v + HexMetrics.wallYOffset;
 
         return near;
     }
@@ -437,6 +439,7 @@ class Prefabs {
     private static _farmFeatureMaterial: BABYLON.StandardMaterial;
     private static _plantFeatureMaterial: BABYLON.StandardMaterial;
     private static _wallsMaterial: BABYLON.PBRMaterial;
+    private static _towerMaterial: BABYLON.PBRMaterial;
 
     private static _foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
@@ -811,6 +814,18 @@ class Prefabs {
         return Prefabs._wallsMaterial;
     }
 
+    private static towerMaterial(scene: BABYLON.Scene): BABYLON.Material {
+        if (!Prefabs._towerMaterial) {
+            Prefabs._towerMaterial = new BABYLON.PBRMaterial("tower_material", scene);
+            // Prefabs._towerMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._towerMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._towerMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._towerMaterial.metallic = 0;
+        }
+
+        return Prefabs._towerMaterial;
+    }
+
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
 
@@ -927,8 +942,74 @@ class Prefabs {
         walls._useColors = false;
         walls._useCollider = false;
         walls._useUVCoordinates = false;
+        walls.alphaIndex = 150;
 
         return walls;
+    }
+
+    public static wallTower(name: string, scene: BABYLON.Scene): BABYLON.Mesh {
+        let
+            box1 = BABYLON.MeshBuilder.CreateBox(`${name}_base`, {width: 2, height: 5, depth: 2}, scene),
+            box2 = BABYLON.MeshBuilder.CreateBox(`${name}_top`, {size: 1}, scene);
+
+        box2.setParent(box1);
+        box2.locallyTranslate(new BABYLON.Vector3(0, 2.5, 0));
+ 
+        let tower = BABYLON.Mesh.MergeMeshes([box1, box2], true);
+        
+        tower.isVisible = true;
+        tower.isPickable = false;
+        tower.material = Prefabs.towerMaterial(scene);
+
+        return tower;
+    }
+}
+
+class XQuaternion {
+    public static getForwardVector(q: BABYLON.Quaternion): BABYLON.Vector3 {
+        return new BABYLON.Vector3(
+            2 * (q.x * q.z + q.w * q.y),
+            2 * (q.y * q.x - q.w * q.x),
+            1 - 2 * (q.x * q.x + q.y * q.y)
+        );
+    }
+
+    public static getUpVector(q: BABYLON.Quaternion): BABYLON.Vector3 {
+        return new BABYLON.Vector3(
+            2 * (q.x * q.y - q.w * q.z),
+            1 - 2 * (q.x * q.x + q.z * q.z),
+            2 * (q.y * q.z + q.w * q.x)
+        );
+    }
+
+    public static getRightVector(q: BABYLON.Quaternion): BABYLON.Vector3 {
+        return new BABYLON.Vector3(
+            1 - 2 * (q.y * q.y + q.z * q.z),
+            2 * (q.x * q.y + q.w * q.z),
+            2 * (q.x * q.z - q.w * q.y)
+        );
+    }
+}
+
+class XMesh {
+    public static setAxisRight(mesh: BABYLON.Mesh, axis: BABYLON.Vector3) {
+        let 
+            eulerAngles = BABYLON.Quaternion.FromEulerAngles(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z),
+            currentRightVector = XQuaternion.getRightVector(eulerAngles);
+
+        let w1 = axis.clone(), w2 = currentRightVector.clone();
+
+        w1.y = 0;
+        w2.y = 0;
+        w1.normalize();
+        w2.normalize();
+
+        let
+            angle = Math.acos(BABYLON.Vector3.Dot(w1, w2)),
+            newAxis = BABYLON.Vector3.Cross(w1, w2),
+            quart = BABYLON.Quaternion.RotationAxis(newAxis, angle);
+
+        mesh.rotationQuaternion = quart;
     }
 }
 
@@ -1372,7 +1453,12 @@ class HexMesh extends BABYLON.Mesh {
             vertexData = new BABYLON.VertexData(),
             normals = [];
 
-        BABYLON.VertexData.ComputeNormals(this._vertices, this._triangles, normals);
+        BABYLON.VertexData.ComputeNormals(
+            this._vertices, 
+            this._triangles, 
+            normals, 
+            {useRightHandedSystem: true}
+        );
         
         vertexData.positions = this._vertices;
         vertexData.indices = this._triangles;
@@ -1708,7 +1794,8 @@ class HexFeatureManager {
         nearLeft: BABYLON.Vector3, 
         farLeft: BABYLON.Vector3, 
         nearRight: BABYLON.Vector3, 
-        farRight: BABYLON.Vector3
+        farRight: BABYLON.Vector3,
+        addTower: boolean = false
     ): void {
         nearLeft = HexMetrics.perturb(nearLeft);
         farLeft = HexMetrics.perturb(farLeft);
@@ -1744,6 +1831,14 @@ class HexFeatureManager {
 
         this._walls.addQuadUnperturbed(v2, v1, v4, v3);
         this._walls.addQuadUnperturbed(t1, t2, v3, v4);
+
+        if (addTower) {
+            let towerInstance = Prefabs.wallTower(`tower`, this._scene);
+            towerInstance.setParent(this._container);
+            towerInstance.position = left.add(right).scale(0.5);
+            towerInstance.position.y += towerInstance.getBoundingInfo().boundingBox.extendSize.y * 0.5 + 1;
+            XMesh.setAxisRight(towerInstance, right.subtract(left));
+        }
     }
 
     public addWallSegmentCorner(
@@ -1761,7 +1856,14 @@ class HexFeatureManager {
 
         if (leftWall) {
             if (rightWall) {
-                this.addWallSegment(pivot, left, pivot, right);
+                let hasTower = false;
+
+                if (leftCell.elevation === rightCell.elevation) {
+                    let hash = HexMetrics.sampleHashGrid(pivot.add(left).add(right).scale(1/3));
+                    hasTower = hash.e < HexMetrics.wallTowerThreshold;                   
+                }
+
+                this.addWallSegment(pivot, left, pivot, right, hasTower);
             }
             else if (leftCell.elevation < rightCell.elevation) {
                 this.addWallWedge(pivot, left, right);
