@@ -1,6 +1,38 @@
 ///<reference path="babylon.d.ts" />
 ///<reference path="babylon.gui.d.ts" />
 ///<reference path="babylonjs.materials.module.d.ts" />
+class HexCellColor {
+    static initialize() {
+        HexCellColor.colors = new Map();
+        HexCellColor.colors.set("Yellow", HexCellColor.PASTEL_YELLOW);
+        HexCellColor.colors.set("Green", HexCellColor.PASTEL_GREEN);
+        HexCellColor.colors.set("Blue", HexCellColor.PASTEL_BLUE);
+        HexCellColor.colors.set("Orange", HexCellColor.PASTEL_ORANGE);
+        HexCellColor.colors.set("White", HexCellColor.WHITE);
+    }
+    static getAllColors() {
+        let colors = [];
+        HexCellColor.colors.forEach(c => colors.push(c));
+        return colors;
+    }
+    static average(colors) {
+        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
+        for (let i = 0; i < colors.length; i++) {
+            avgColor.addInPlace(colors[i]);
+        }
+        avgColor.r = avgColor.r / colors.length;
+        avgColor.g = avgColor.g / colors.length;
+        avgColor.b = avgColor.b / colors.length;
+        return avgColor;
+    }
+}
+HexCellColor.BLACK = BABYLON.Color4.FromHexString("#000000ff");
+HexCellColor.WHITE = BABYLON.Color4.FromHexString("#ffffffff");
+HexCellColor.PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
+HexCellColor.PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
+HexCellColor.PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
+HexCellColor.PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
+HexCellColor.initialize();
 class HexMetrics {
     static getFirstCorner(direction) {
         return HexMetrics.corners[direction];
@@ -147,6 +179,7 @@ HexMetrics.corners = [
     new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius)
 ];
+HexMetrics.colors = HexCellColor.getAllColors();
 class Texture {
     constructor(data, width, height) {
         this.data = data;
@@ -290,36 +323,6 @@ class HexHash {
         return hexHash;
     }
 }
-class HexCellColor {
-    static default() {
-        return HexCellColor.PASTEL_BLUE;
-    }
-    static random() {
-        return HexCellColor.colors[Math.floor(Math.random() * HexCellColor.colors.length)];
-    }
-    static average(colors) {
-        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
-        for (let i = 0; i < colors.length; i++) {
-            avgColor.addInPlace(colors[i]);
-        }
-        avgColor.r = avgColor.r / colors.length;
-        avgColor.g = avgColor.g / colors.length;
-        avgColor.b = avgColor.b / colors.length;
-        return avgColor;
-    }
-}
-HexCellColor.WHITE = BABYLON.Color4.FromHexString("#ffffffff");
-HexCellColor.PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
-HexCellColor.PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
-HexCellColor.PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
-HexCellColor.PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
-HexCellColor.colors = [
-    BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-    HexCellColor.PASTEL_YELLOW,
-    HexCellColor.PASTEL_BLUE,
-    HexCellColor.PASTEL_GREEN,
-    HexCellColor.PASTEL_ORANGE
-];
 class Prefabs {
     static terrainMaterial(scene) {
         if (!Prefabs._terrainMaterial) {
@@ -850,6 +853,7 @@ class HexCell extends BABYLON.Mesh {
         super(name, scene);
         this.neighbors = new Array(6);
         this._elevation = Number.MIN_VALUE;
+        this._terrainTypeIndex = 0;
         this.roads = new Array(6);
         this._urbanLevel = 0;
         this._farmLevel = 0;
@@ -900,13 +904,16 @@ class HexCell extends BABYLON.Mesh {
         this.refreshPosition();
     }
     get color() {
-        return this._color;
+        return HexMetrics.colors[this._terrainTypeIndex];
     }
-    set color(color) {
-        if (this._color === color) {
+    get terrainTypeIndex() {
+        return this._terrainTypeIndex;
+    }
+    set terrainTypeIndex(value) {
+        if (this._terrainTypeIndex === value) {
             return;
         }
-        this._color = color;
+        this._terrainTypeIndex = value;
         this.refresh();
     }
     get hasIncomingRiver() {
@@ -2260,11 +2267,9 @@ class HexGrid {
         // cell.material = material;
         if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
             let cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
-            cell.color = cfg.color;
             cell.elevation = cfg.elevation;
         }
         else {
-            cell.color = HexCellColor.default();
             cell.elevation = 0;
         }
         if (x > 0) {
@@ -2335,7 +2340,6 @@ var OptionalToggle;
 class HexMapEditor {
     constructor(grid) {
         this._toolkitPanelOpened = false;
-        this.activeColor = null;
         this.activeElevation = 0.0;
         this.activeWaterLevel = 0.0;
         this.activeUrbanLevel = 0.0;
@@ -2385,7 +2389,11 @@ class HexMapEditor {
                 this.showPanel();
             }
         });
-        this.addPanelSelect("Color", HexMapEditor.COLORS, this.setActiveColor.bind(this));
+        let i = 0, terrainTypeSelection = [{ label: "Ignore", value: -1 }];
+        HexCellColor.colors.forEach((_v, key) => {
+            terrainTypeSelection.push({ label: key, value: i++ });
+        });
+        this.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
         this.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
         this.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
         this.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
@@ -2502,8 +2510,8 @@ class HexMapEditor {
         if (!cell) {
             return;
         }
-        if (this.activeColor != null) {
-            cell.color = this.activeColor;
+        if (this.activeTerrainTypeIndex >= 0) {
+            cell.terrainTypeIndex = this.activeTerrainTypeIndex;
         }
         if (this.isElevationSelected) {
             cell.elevation = this.activeElevation;
@@ -2557,9 +2565,8 @@ class HexMapEditor {
             }
         }
     }
-    setActiveColor(color) {
-        let clr = color in HexCellColor ? HexCellColor[color] : null;
-        this.activeColor = clr;
+    setTerrainTypeIndex(index) {
+        this.activeTerrainTypeIndex = index;
     }
     setElevation(elevation) {
         this.activeElevation = Math.floor(elevation);
@@ -2618,13 +2625,9 @@ class HexMapEditor {
         }
         this.walledMode = parseInt(mode);
     }
+    save() {
+    }
+    load() {
+    }
 }
 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;
-HexMapEditor.COLORS = [
-    { label: "--", value: null },
-    { label: "White", value: 'WHITE' },
-    { label: "Blue", value: 'PASTEL_BLUE' },
-    { label: "Yellow", value: 'PASTEL_YELLOW' },
-    { label: "Green", value: 'PASTEL_GREEN' },
-    { label: "Orange", value: 'PASTEL_ORANGE' }
-];

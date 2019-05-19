@@ -4,6 +4,49 @@
 
 type Nullable<T> = T | null;
 
+class HexCellColor {
+    public static BLACK = BABYLON.Color4.FromHexString("#000000ff");
+    public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
+    public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
+    public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
+    public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
+    public static PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
+    public static colors: Map<string, BABYLON.Color4>;
+
+    public static initialize() {
+        HexCellColor.colors = new Map<string, BABYLON.Color4>();
+
+        HexCellColor.colors.set("Yellow", HexCellColor.PASTEL_YELLOW);
+        HexCellColor.colors.set("Green", HexCellColor.PASTEL_GREEN);
+        HexCellColor.colors.set("Blue", HexCellColor.PASTEL_BLUE);
+        HexCellColor.colors.set("Orange", HexCellColor.PASTEL_ORANGE);
+        HexCellColor.colors.set("White", HexCellColor.WHITE);
+    }
+
+    public static getAllColors(): BABYLON.Color4[] {
+        let colors = [];
+
+        HexCellColor.colors.forEach(c => colors.push(c));
+
+        return colors;
+    }
+
+    public static average(colors: Array<BABYLON.Color4>): BABYLON.Color4 {
+        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
+
+        for (let i = 0; i < colors.length; i++) {
+            avgColor.addInPlace(colors[i]);
+        }
+
+        avgColor.r = avgColor.r / colors.length;
+        avgColor.g = avgColor.g / colors.length;
+        avgColor.b = avgColor.b / colors.length;
+
+        return avgColor;
+    }
+}
+HexCellColor.initialize();
+
 class HexMetrics {
     public static outerToInner = 0.866025404;
     public static innerToOuter = 1.0 / HexMetrics.outerToInner;
@@ -51,6 +94,8 @@ class HexMetrics {
         new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius)
     ];
+
+    public static colors: BABYLON.Color4[] = HexCellColor.getAllColors();
 
     public static getFirstCorner(direction: HexDirection): BABYLON.Vector3 {
         return HexMetrics.corners[direction];
@@ -387,45 +432,6 @@ class HexHash {
         hexHash.e = randomFn() * .999;
 
         return hexHash;
-    }
-}
-
-class HexCellColor {
-
-    public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
-    public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
-    public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
-    public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
-    public static PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
-
-    private static colors: Array<BABYLON.Color4> = [
-        BABYLON.Color4.FromColor3(BABYLON.Color3.White()),
-        HexCellColor.PASTEL_YELLOW,
-        HexCellColor.PASTEL_BLUE,
-        HexCellColor.PASTEL_GREEN,
-        HexCellColor.PASTEL_ORANGE
-    ];
-
-    public static default() {
-        return HexCellColor.PASTEL_BLUE;
-    }
-
-    public static random(): BABYLON.Color4 {
-        return HexCellColor.colors[Math.floor(Math.random() * HexCellColor.colors.length)];
-    }
-
-    public static average(colors: Array<BABYLON.Color4>): BABYLON.Color4 {
-        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
-
-        for (let i = 0; i < colors.length; i++) {
-            avgColor.addInPlace(colors[i]);
-        }
-
-        avgColor.r = avgColor.r / colors.length;
-        avgColor.g = avgColor.g / colors.length;
-        avgColor.b = avgColor.b / colors.length;
-
-        return avgColor;
     }
 }
 
@@ -1157,7 +1163,7 @@ class HexCell extends BABYLON.Mesh {
 
     private _cellPosition: BABYLON.Vector3;
     private _elevation: number = Number.MIN_VALUE;
-    private _color: BABYLON.Color4;
+    private _terrainTypeIndex: number = 0;
     private _hasIncomingRiver: boolean;
     private _hasOutgoingRiver: boolean;
     private _incomingRiver: HexDirection;
@@ -1229,15 +1235,19 @@ class HexCell extends BABYLON.Mesh {
     }
 
     get color(): BABYLON.Color4 {
-        return this._color;
+        return HexMetrics.colors[this._terrainTypeIndex];
     }
 
-    set color(color: BABYLON.Color4) {
-        if (this._color === color) {
+    get terrainTypeIndex(): number {
+        return this._terrainTypeIndex;
+    }
+
+    set terrainTypeIndex(value: number) {
+        if (this._terrainTypeIndex === value) {
             return;
         }
 
-        this._color = color;
+        this._terrainTypeIndex = value;
         this.refresh();
     }
 
@@ -3303,10 +3313,8 @@ class HexGrid {
 
         if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
             let cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
-            cell.color = cfg.color;
             cell.elevation = cfg.elevation;
         } else {
-            cell.color = HexCellColor.default();
             cell.elevation = 0;
         }
 
@@ -3371,15 +3379,6 @@ enum OptionalToggle {
 class HexMapEditor {
     public static POINTER_BLOCKED_BY_GUI = false;
 
-    private static COLORS = [
-        {label: "--", value: null},
-        {label: "White", value: 'WHITE'},
-        {label: "Blue", value: 'PASTEL_BLUE'},
-        {label: "Yellow", value: 'PASTEL_YELLOW'},
-        {label: "Green", value: 'PASTEL_GREEN'},
-        {label: "Orange", value: 'PASTEL_ORANGE'}
-    ];
-
     private grid: HexGrid;
     private _scene: BABYLON.Scene;
 
@@ -3388,8 +3387,8 @@ class HexMapEditor {
     private _toolkitPanelContainer;
     private _toolkitPanelToogle;
     
-    private activeColor?: BABYLON.Color4 = null;
-    private activeElevation?: number = 0.0;
+    private activeTerrainTypeIndex: number;
+    private activeElevation: number = 0.0;
     private activeWaterLevel: number = 0.0;
     private activeUrbanLevel: number = 0.0;
     private activeFarmLevel: number = 0.0;
@@ -3453,7 +3452,15 @@ class HexMapEditor {
             }
         });
 
-        this.addPanelSelect("Color", HexMapEditor.COLORS, this.setActiveColor.bind(this));
+        let 
+            i = 0,
+            terrainTypeSelection = [{label: "Ignore", value: -1}];
+            
+        HexCellColor.colors.forEach((_v: any, key: string) => {
+            terrainTypeSelection.push({label: key, value: i++});
+        });
+        
+        this.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
         this.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
         this.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
         this.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
@@ -3614,8 +3621,8 @@ class HexMapEditor {
             return;
         }
 
-        if (this.activeColor != null) {
-            cell.color = this.activeColor;
+        if (this.activeTerrainTypeIndex >= 0) {
+            cell.terrainTypeIndex = this.activeTerrainTypeIndex;
         }
 
         if (this.isElevationSelected) {
@@ -3685,10 +3692,8 @@ class HexMapEditor {
         }
     }
 
-    setActiveColor(color: string): void {
-        let clr = color in HexCellColor ? HexCellColor[color] : null;
-
-        this.activeColor = clr;
+    setTerrainTypeIndex(index: number): void {
+        this.activeTerrainTypeIndex = index;
     }
 
     setElevation(elevation: number): void {
@@ -3765,5 +3770,13 @@ class HexMapEditor {
         }
 
         this.walledMode = parseInt(mode);
+    }
+
+    public save(): void {
+
+    }
+
+    public load(): void {
+        
     }
 }
