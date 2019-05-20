@@ -1,6 +1,16 @@
 ///<reference path="babylon.d.ts" />
 ///<reference path="babylon.gui.d.ts" />
 ///<reference path="babylonjs.materials.module.d.ts" />
+class Filesys {
+    static write(data) {
+        data = new Blob([data], { type: "application/octet-stream" });
+        if (Filesys.objectUrl) {
+            window.URL.revokeObjectURL(Filesys.objectUrl);
+        }
+        Filesys.objectUrl = window.URL.createObjectURL(data);
+        return Filesys.objectUrl;
+    }
+}
 class HexCellColor {
     static initialize() {
         HexCellColor.colors = new Map();
@@ -1138,6 +1148,46 @@ class HexCell extends BABYLON.Mesh {
     }
     refreshSelfOnly() {
         this.chunk.refresh();
+    }
+    save(buffer) {
+        buffer.push(this._terrainTypeIndex);
+        buffer.push(this._elevation);
+        buffer.push(this._waterLevel);
+        buffer.push(this._urbanLevel);
+        buffer.push(this._farmLevel);
+        buffer.push(this._plantLevel);
+        buffer.push(this._specialIndex);
+        buffer.push(~~this._walled);
+        buffer.push(~~this.hasIncomingRiver);
+        buffer.push(this.incomingRiver);
+        buffer.push(~~this.hasOutgoingRiver);
+        buffer.push(this.outgoingRiver);
+        this.roads.forEach((hasRoad) => buffer.push(~~hasRoad));
+    }
+    load(buffer) {
+        this.terrainTypeIndex = this.readInt32(buffer);
+        this.elevation = this.readInt32(buffer);
+        this.waterLevel = this.readInt32(buffer);
+        this.urbanLevel = this.readInt32(buffer);
+        this.farmLevel = this.readInt32(buffer);
+        this.plantLevel = this.readInt32(buffer);
+        this.specialIndex = this.readInt32(buffer);
+        this.walled = this.readInt32(buffer) > 0 ? true : false;
+        this._hasIncomingRiver = this.readInt32(buffer) > 0 ? true : false;
+        this._incomingRiver = this.readInt32(buffer);
+        this._hasOutgoingRiver = this.readInt32(buffer) > 0 ? true : false;
+        this._outgoingRiver = this.readInt32(buffer);
+        this.roads.forEach((v, idx) => {
+            this.roads[idx] = this.readInt32(buffer) > 0 ? true : false;
+        });
+        this.specialIndex = 0; // TODO!!
+    }
+    readInt32(buffer) {
+        let result = buffer.next();
+        if (result.done) {
+            return null;
+        }
+        return result.value;
     }
 }
 HexCell.CELL_OVERLAY_ELEVATION = 0.1;
@@ -2312,6 +2362,13 @@ class HexGrid {
         let chunkX = ~~(x / HexMetrics.chunkSizeX), chunkZ = ~~(z / HexMetrics.chunkSizeZ), chunk = this.chunks[chunkX + chunkZ * this.chunkCountX], localX = x - chunkX * HexMetrics.chunkSizeX, localZ = z - chunkZ * HexMetrics.chunkSizeZ;
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
+    save(buffer) {
+        this.cells.forEach((cell) => cell.save(buffer));
+    }
+    load(buffer) {
+        this.cells.forEach((cell) => cell.load(buffer));
+        this.chunks.forEach((chunk) => chunk.refresh());
+    }
 }
 HexGrid.CHUNKS_TO_REFRESH = new Map();
 // public static defaultGridonfiguration = {};
@@ -2404,6 +2461,15 @@ class HexMapEditor {
         this.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
         this.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
         this.addPanelToggleSlider("Brush", 0, 4, 0, () => { }, this.setBrushSize.bind(this));
+        let btnGroup = document.createElement('div'), saveBtn = document.createElement('button'), loadBtn = document.createElement('input');
+        saveBtn.innerText = "Save";
+        // loadBtn.innerText = "Load";
+        loadBtn.type = 'File';
+        saveBtn.onclick = this.save.bind(this);
+        loadBtn.onchange = this.load.bind(this);
+        btnGroup.appendChild(saveBtn);
+        btnGroup.appendChild(loadBtn);
+        this._toolkitPanelContainer.appendChild(btnGroup);
     }
     addPanelSelect(label, options, callbackFn) {
         let group = document.createElement('div'), groupLabel = document.createElement('label'), select = document.createElement('select');
@@ -2626,8 +2692,30 @@ class HexMapEditor {
         this.walledMode = parseInt(mode);
     }
     save() {
+        let saveLink = this._toolkitPanelContainer.querySelector('#download-link');
+        if (!saveLink) {
+            saveLink = document.createElement('div');
+            saveLink.id = 'download-link';
+            this._toolkitPanelContainer.append(saveLink);
+        }
+        let data = new Array();
+        this.grid.save(data);
+        let binaryData = new Int32Array(data), link = Filesys.write(binaryData), linkEl = document.createElement('a');
+        linkEl.href = link;
+        linkEl.innerText = "Download";
+        saveLink.innerHTML = '';
+        saveLink.appendChild(linkEl);
     }
-    load() {
+    load(evt) {
+        let f = evt.target.files[0], reader = new FileReader();
+        reader.onload = ((theFile) => {
+            return (e) => {
+                let data = new Int32Array(e.target.result);
+                console.log(e.target.result, data);
+                this.grid.load(data.values());
+            };
+        })(f);
+        reader.readAsArrayBuffer(f);
     }
 }
 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;

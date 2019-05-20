@@ -4,6 +4,93 @@
 
 type Nullable<T> = T | null;
 
+class ArrayBufferUtil {
+    public static transfer(source: ArrayBuffer, length: number): ArrayBuffer {
+        if (!(source instanceof ArrayBuffer)) {
+            throw new TypeError('Source must be an instance of ArrayBuffer');
+        }
+
+        if (length <= source.byteLength) {
+            return source.slice(0, length);
+        }
+
+        let 
+            sourceView = new Uint8Array(source),
+            destView = new Uint8Array(new ArrayBuffer(length));
+        
+        destView.set(sourceView);
+
+        return destView.buffer;
+    }
+}
+
+class FileWriter {
+    private static INT8 = 1;
+    private static UINT8 = 1;
+    private static INT16 = 2;
+    private static UINT16 = 2;
+    private static INT32 = 4;
+    private static UINT32 = 4;
+    private static FLOAT32 = 4;
+    private static FLOAT64 = 8;
+
+    private _buffer: DataView;
+    private _offset: number;
+
+    constructor() {
+        this._buffer = new DataView(new ArrayBuffer(128));
+        this._offset = 0;
+    }
+
+    getInt8(): number {
+        let b = this._buffer.getInt8(this._offset);
+        this._offset += FileWriter.INT8;
+
+        return b;
+    }
+
+    getUint8(): number {
+        let b = this._buffer.getUint8(this._offset);
+        this._offset += FileWriter.UINT8;
+
+        return b;
+    }
+
+    getInt16(): number {
+        let b = this._buffer.getInt16(this._offset);
+        this._offset += FileWriter.INT16;
+
+        return b;
+    }
+
+    getUint16(): number {
+        let b = this._buffer.getUint16(this._offset);
+        this._offset += FileWriter.UINT16;
+
+        return b;
+    }
+}
+
+class Filesys {
+    private static objectUrl;
+
+    public static write(data): string {
+        data = new Blob([data], {type: "application/octet-stream"});
+
+        if (Filesys.objectUrl) {
+            window.URL.revokeObjectURL(Filesys.objectUrl);
+        }
+
+        Filesys.objectUrl = window.URL.createObjectURL(data);
+
+        return Filesys.objectUrl;
+    }
+
+    public static resizeArrayBuffer(buffer: ArrayBuffer) {
+        return ArrayBufferUtil.transfer(buffer, buffer.byteLength*2);
+    }
+}
+
 class HexCellColor {
     public static BLACK = BABYLON.Color4.FromHexString("#000000ff");
     public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
@@ -1547,6 +1634,54 @@ class HexCell extends BABYLON.Mesh {
 
     public refreshSelfOnly(): void {
         this.chunk.refresh();
+    }
+
+    public save(buffer: Array<number>): void {
+        buffer.push(this._terrainTypeIndex);
+        buffer.push(this._elevation);
+        buffer.push(this._waterLevel);
+        buffer.push(this._urbanLevel);
+        buffer.push(this._farmLevel);
+        buffer.push(this._plantLevel);
+        buffer.push(this._specialIndex);
+        buffer.push(~~this._walled);
+        buffer.push(~~this.hasIncomingRiver);
+        buffer.push(this.incomingRiver);
+        buffer.push(~~this.hasOutgoingRiver);
+        buffer.push(this.outgoingRiver);
+
+        this.roads.forEach((hasRoad: boolean) => buffer.push(~~hasRoad));
+    }
+
+    public load(buffer: IterableIterator<number>): void {
+        this.terrainTypeIndex = this.readInt32(buffer);
+        this.elevation = this.readInt32(buffer);
+        this.waterLevel = this.readInt32(buffer);
+        this.urbanLevel = this.readInt32(buffer);
+        this.farmLevel = this.readInt32(buffer);
+        this.plantLevel = this.readInt32(buffer);
+        this.specialIndex = this.readInt32(buffer);
+        this.walled = this.readInt32(buffer) > 0 ? true : false;
+        this._hasIncomingRiver = this.readInt32(buffer) > 0 ? true : false;
+        this._incomingRiver = this.readInt32(buffer);
+        this._hasOutgoingRiver = this.readInt32(buffer) > 0 ? true : false;
+        this._outgoingRiver = this.readInt32(buffer);
+        
+        this.roads.forEach((v: boolean, idx: number) => {
+            this.roads[idx] = this.readInt32(buffer) > 0 ? true : false;
+        });
+
+        this.specialIndex = 0; // TODO!!
+    }
+
+    private readInt32(buffer: IterableIterator<number>): number {
+        let result: IteratorResult<number> = buffer.next();
+
+        if (result.done) {
+            return null;
+        }
+
+        return result.value;
     }
 }
 
@@ -3370,6 +3505,15 @@ class HexGrid {
 
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
+
+    public save(buffer: Array<number>): void {
+        this.cells.forEach((cell: HexCell) => cell.save(buffer));
+    }
+
+    public load(buffer: IterableIterator<number>): void {
+        this.cells.forEach((cell: HexCell) => cell.load(buffer));
+        this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
+    }
 }
 
 enum OptionalToggle {
@@ -3471,6 +3615,23 @@ class HexMapEditor {
         this.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
         this.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
         this.addPanelToggleSlider("Brush", 0, 4, 0, () => {}, this.setBrushSize.bind(this));
+
+        let 
+            btnGroup = document.createElement('div'),
+            saveBtn = document.createElement('button'),
+            loadBtn = document.createElement('input');
+
+        saveBtn.innerText = "Save";
+        // loadBtn.innerText = "Load";
+        loadBtn.type = 'File';
+
+        saveBtn.onclick = this.save.bind(this);
+        loadBtn.onchange = this.load.bind(this);
+
+        btnGroup.appendChild(saveBtn);
+        btnGroup.appendChild(loadBtn);
+
+        this._toolkitPanelContainer.appendChild(btnGroup);
     }
 
     addPanelSelect(label: string, options: Array<any>, callbackFn): void {
@@ -3773,10 +3934,43 @@ class HexMapEditor {
     }
 
     public save(): void {
+        let saveLink = this._toolkitPanelContainer.querySelector('#download-link');
 
+        if (!saveLink) {
+            saveLink = document.createElement('div');
+            saveLink.id = 'download-link';
+            this._toolkitPanelContainer.append(saveLink);
+        }
+
+        let data = new Array<number>();
+
+        this.grid.save(data);
+
+        let
+            binaryData = new Int32Array(data),
+            link = Filesys.write(binaryData),
+            linkEl = document.createElement('a');
+
+        linkEl.href = link;
+        linkEl.innerText = "Download";
+
+        saveLink.innerHTML = '';
+        saveLink.appendChild(linkEl);
     }
 
-    public load(): void {
+    public load(evt): void {
+        let 
+            f = evt.target.files[0],
+            reader = new FileReader();
+
+        reader.onload = ((theFile) => {
+            return (e) => {
+                let data = new Int32Array(e.target.result);
+                console.log(e.target.result, data);
+                this.grid.load(data.values());
+            };
+        })(f);
         
+        reader.readAsArrayBuffer(f);
     }
 }
