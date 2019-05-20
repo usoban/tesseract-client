@@ -1,6 +1,145 @@
 ///<reference path="babylon.d.ts" />
 ///<reference path="babylon.gui.d.ts" />
 ///<reference path="babylonjs.materials.module.d.ts" />
+class ArrayBufferUtil {
+    static transfer(source, length) {
+        if (!(source instanceof ArrayBuffer)) {
+            throw new TypeError('Source must be an instance of ArrayBuffer');
+        }
+        if (length <= source.byteLength) {
+            return source.slice(0, length);
+        }
+        let sourceView = new Uint8Array(source), destView = new Uint8Array(new ArrayBuffer(length));
+        destView.set(sourceView);
+        return destView.buffer;
+    }
+}
+class ByteBuffer {
+    constructor(size = 128) {
+        this._buffer = new DataView(new ArrayBuffer(size));
+        this._offset = 0;
+    }
+    readBoolean() {
+        return this.readInt8() > 0 ? true : false;
+    }
+    readInt8() {
+        let b = this._buffer.getInt8(this._offset);
+        this._offset += ByteBuffer.INT8;
+        return b;
+    }
+    readUint8() {
+        let b = this._buffer.getUint8(this._offset);
+        this._offset += ByteBuffer.UINT8;
+        return b;
+    }
+    readInt16() {
+        let b = this._buffer.getInt16(this._offset);
+        this._offset += ByteBuffer.INT16;
+        return b;
+    }
+    readUint16() {
+        let b = this._buffer.getUint16(this._offset);
+        this._offset += ByteBuffer.UINT16;
+        return b;
+    }
+    readInt32() {
+        let b = this._buffer.getInt32(this._offset);
+        this._offset += ByteBuffer.INT32;
+        return b;
+    }
+    readUint32() {
+        let b = this._buffer.getUint32(this._offset);
+        this._offset += ByteBuffer.UINT32;
+        return b;
+    }
+    readFloat32() {
+        let b = this._buffer.getFloat32(this._offset);
+        this._offset += ByteBuffer.FLOAT32;
+        return b;
+    }
+    readFloat64() {
+        let b = this._buffer.getFloat64(this._offset);
+        this._offset += ByteBuffer.FLOAT64;
+        return b;
+    }
+    assureFreeSpace(nBytes) {
+        // Buffer has enough space for nBytes?
+        if (this._offset + nBytes <= this._buffer.byteLength) {
+            return;
+        }
+        // If not, double the buffer size.
+        this._buffer = new DataView(ArrayBufferUtil.transfer(this._buffer.buffer, this._buffer.byteLength * 2));
+    }
+    writeBoolean(data) {
+        this.writeInt8(data ? 1 : 0);
+    }
+    writeInt8(data) {
+        this.assureFreeSpace(ByteBuffer.INT8);
+        this._buffer.setInt8(this._offset, data);
+        this._offset += ByteBuffer.INT8;
+    }
+    writeUint8(data) {
+        this.assureFreeSpace(ByteBuffer.UINT8);
+        this._buffer.setUint8(this._offset, data);
+        this._offset += ByteBuffer.UINT8;
+    }
+    writeInt16(data) {
+        this.assureFreeSpace(ByteBuffer.INT16);
+        this._buffer.setInt16(this._offset, data);
+        this._offset += ByteBuffer.INT16;
+    }
+    writeUint16(data) {
+        this.assureFreeSpace(ByteBuffer.UINT16);
+        this._buffer.setUint16(this._offset, data);
+        this._offset += ByteBuffer.UINT16;
+    }
+    writeInt32(data) {
+        this.assureFreeSpace(ByteBuffer.INT32);
+        this._buffer.setInt32(this._offset, data);
+        this._offset += ByteBuffer.INT32;
+    }
+    writeUint32(data) {
+        this.assureFreeSpace(ByteBuffer.UINT32);
+        this._buffer.setUint32(this._offset, data);
+        this._offset += ByteBuffer.UINT32;
+    }
+    writeFloat32(data) {
+        this.assureFreeSpace(ByteBuffer.FLOAT32);
+        this._buffer.setFloat32(this._offset, data);
+        this._offset += ByteBuffer.FLOAT32;
+    }
+    writeFloat64(data) {
+        this.assureFreeSpace(ByteBuffer.FLOAT64);
+        this._buffer.setFloat64(this._offset, data);
+        this._offset += ByteBuffer.FLOAT64;
+    }
+    reset() {
+        this._offset = 0;
+    }
+    get buffer() {
+        return this._buffer;
+    }
+    get offset() {
+        return this._offset;
+    }
+    set buffer(buffer) {
+        this._buffer = buffer;
+        this.reset();
+    }
+    static make(buffer) {
+        let byteBuffer = new ByteBuffer();
+        byteBuffer.buffer = buffer;
+        return byteBuffer;
+    }
+}
+ByteBuffer.INT8 = 1;
+ByteBuffer.UINT8 = 1;
+ByteBuffer.INT16 = 2;
+ByteBuffer.UINT16 = 2;
+ByteBuffer.INT32 = 4;
+ByteBuffer.UINT32 = 4;
+ByteBuffer.FLOAT32 = 4;
+ByteBuffer.FLOAT64 = 8;
 class Filesys {
     static write(data) {
         data = new Blob([data], { type: "application/octet-stream" });
@@ -9,6 +148,9 @@ class Filesys {
         }
         Filesys.objectUrl = window.URL.createObjectURL(data);
         return Filesys.objectUrl;
+    }
+    static resizeArrayBuffer(buffer) {
+        return ArrayBufferUtil.transfer(buffer, buffer.byteLength * 2);
     }
 }
 class HexCellColor {
@@ -894,16 +1036,14 @@ class HexCell extends BABYLON.Mesh {
             return;
         }
         this._elevation = elevation;
-        this._cellPosition.y = elevation * HexMetrics.elevationStep;
-        this._cellPosition.y +=
-            (HexMetrics.sampleNoise(this._cellPosition).y * 2.0 - 1.0) * HexMetrics.elevationPerturbStrength;
+        this.refreshPosition();
         this.validateRivers();
         for (let i = 0; i < this.roads.length; i++) {
             if (this.roads[i] && this.getElevationDifference(i) > 0) {
                 this.setRoad(i, false);
             }
         }
-        this.refreshPosition();
+        // this.refreshMeshPosition();
         this.refresh();
     }
     get cellPosition() {
@@ -911,7 +1051,7 @@ class HexCell extends BABYLON.Mesh {
     }
     set cellPosition(position) {
         this._cellPosition = position.clone();
-        this.refreshPosition();
+        this.refreshMeshPosition();
     }
     get color() {
         return HexMetrics.colors[this._terrainTypeIndex];
@@ -1129,9 +1269,15 @@ class HexCell extends BABYLON.Mesh {
         return this.hasIncomingRiver ? this.incomingRiver : this.outgoingRiver;
     }
     // Sets mesh render position from cellPosition (renders it slightly above).
-    refreshPosition() {
+    refreshMeshPosition() {
         this.position = this._cellPosition.clone();
         //this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+    }
+    refreshPosition() {
+        let pos = this._cellPosition.clone();
+        pos.y = this._elevation * HexMetrics.elevationStep;
+        pos.y += (HexMetrics.sampleNoise(pos).y * 2.0 - 1.0) * HexMetrics.elevationPerturbStrength;
+        this.cellPosition = pos;
     }
     refresh() {
         if (!this.chunk)
@@ -1149,45 +1295,65 @@ class HexCell extends BABYLON.Mesh {
     refreshSelfOnly() {
         this.chunk.refresh();
     }
-    save(buffer) {
-        buffer.push(this._terrainTypeIndex);
-        buffer.push(this._elevation);
-        buffer.push(this._waterLevel);
-        buffer.push(this._urbanLevel);
-        buffer.push(this._farmLevel);
-        buffer.push(this._plantLevel);
-        buffer.push(this._specialIndex);
-        buffer.push(~~this._walled);
-        buffer.push(~~this.hasIncomingRiver);
-        buffer.push(this.incomingRiver);
-        buffer.push(~~this.hasOutgoingRiver);
-        buffer.push(this.outgoingRiver);
-        this.roads.forEach((hasRoad) => buffer.push(~~hasRoad));
-    }
-    load(buffer) {
-        this.terrainTypeIndex = this.readInt32(buffer);
-        this.elevation = this.readInt32(buffer);
-        this.waterLevel = this.readInt32(buffer);
-        this.urbanLevel = this.readInt32(buffer);
-        this.farmLevel = this.readInt32(buffer);
-        this.plantLevel = this.readInt32(buffer);
-        this.specialIndex = this.readInt32(buffer);
-        this.walled = this.readInt32(buffer) > 0 ? true : false;
-        this._hasIncomingRiver = this.readInt32(buffer) > 0 ? true : false;
-        this._incomingRiver = this.readInt32(buffer);
-        this._hasOutgoingRiver = this.readInt32(buffer) > 0 ? true : false;
-        this._outgoingRiver = this.readInt32(buffer);
-        this.roads.forEach((v, idx) => {
-            this.roads[idx] = this.readInt32(buffer) > 0 ? true : false;
-        });
-        this.specialIndex = 0; // TODO!!
-    }
-    readInt32(buffer) {
-        let result = buffer.next();
-        if (result.done) {
-            return null;
+    save(writer) {
+        writer.writeUint8(this._terrainTypeIndex);
+        writer.writeInt8(this._elevation);
+        writer.writeInt8(this._waterLevel);
+        writer.writeUint8(this._urbanLevel);
+        writer.writeUint8(this._farmLevel);
+        writer.writeUint8(this._plantLevel);
+        writer.writeUint8(this._specialIndex);
+        writer.writeBoolean(this._walled);
+        if (this._hasIncomingRiver) {
+            writer.writeUint8(this._incomingRiver + 128);
         }
-        return result.value;
+        else {
+            writer.writeUint8(0);
+        }
+        if (this._hasOutgoingRiver) {
+            writer.writeUint8(this._outgoingRiver + 128);
+        }
+        else {
+            writer.writeUint8(0);
+        }
+        let roadFlags = 0;
+        for (let i = 0; i < this.roads.length; i++) {
+            if (this.roads[i]) {
+                roadFlags |= 1 << i;
+            }
+        }
+        writer.writeUint8(roadFlags);
+    }
+    load(reader) {
+        this._terrainTypeIndex = reader.readUint8();
+        this._elevation = reader.readInt8();
+        this.refreshPosition();
+        this._waterLevel = reader.readInt8();
+        this._urbanLevel = reader.readUint8();
+        this._farmLevel = reader.readUint8();
+        this._plantLevel = reader.readUint8();
+        this._specialIndex = reader.readUint8();
+        this._walled = reader.readBoolean();
+        let riverData = reader.readUint8();
+        if (riverData >= 128) {
+            this._hasIncomingRiver = true;
+            this._incomingRiver = riverData - 128;
+        }
+        else {
+            this._hasIncomingRiver = false;
+        }
+        riverData = reader.readUint8();
+        if (riverData >= 128) {
+            this._hasOutgoingRiver = true;
+            this._outgoingRiver = riverData - 128;
+        }
+        else {
+            this._hasOutgoingRiver = false;
+        }
+        let roadFlags = reader.readUint8();
+        for (let i = 0; i < this.roads.length; i++) {
+            this.roads[i] = (roadFlags & (1 << i)) != 0;
+        }
     }
 }
 HexCell.CELL_OVERLAY_ELEVATION = 0.1;
@@ -2362,11 +2528,11 @@ class HexGrid {
         let chunkX = ~~(x / HexMetrics.chunkSizeX), chunkZ = ~~(z / HexMetrics.chunkSizeZ), chunk = this.chunks[chunkX + chunkZ * this.chunkCountX], localX = x - chunkX * HexMetrics.chunkSizeX, localZ = z - chunkZ * HexMetrics.chunkSizeZ;
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
-    save(buffer) {
-        this.cells.forEach((cell) => cell.save(buffer));
+    save(writer) {
+        this.cells.forEach((cell) => cell.save(writer));
     }
-    load(buffer) {
-        this.cells.forEach((cell) => cell.load(buffer));
+    load(reader) {
+        this.cells.forEach((cell) => cell.load(reader));
         this.chunks.forEach((chunk) => chunk.refresh());
     }
 }
@@ -2698,9 +2864,10 @@ class HexMapEditor {
             saveLink.id = 'download-link';
             this._toolkitPanelContainer.append(saveLink);
         }
-        let data = new Array();
-        this.grid.save(data);
-        let binaryData = new Int32Array(data), link = Filesys.write(binaryData), linkEl = document.createElement('a');
+        let dataWriter = new ByteBuffer();
+        dataWriter.writeUint32(0); // Version header.
+        this.grid.save(dataWriter);
+        let link = Filesys.write(dataWriter.buffer), linkEl = document.createElement('a');
         linkEl.href = link;
         linkEl.innerText = "Download";
         saveLink.innerHTML = '';
@@ -2710,9 +2877,14 @@ class HexMapEditor {
         let f = evt.target.files[0], reader = new FileReader();
         reader.onload = ((theFile) => {
             return (e) => {
-                let data = new Int32Array(e.target.result);
-                console.log(e.target.result, data);
-                this.grid.load(data.values());
+                let byteBuffer = ByteBuffer.make(new DataView(e.target.result));
+                let version = byteBuffer.readUint32();
+                if (version === 0) {
+                    this.grid.load(byteBuffer);
+                }
+                else {
+                    console.error("Unknown map format " + version);
+                }
             };
         })(f);
         reader.readAsArrayBuffer(f);
