@@ -26,7 +26,7 @@ class Game {
         this._light = new BABYLON.HemisphericLight('light1', new BABYLON.Vector3(0, 1.0, 0), this._scene);
         // this._light = new BABYLON.DirectionalLight('directional_light', new BABYLON.Vector3(0, -1 ,0), this._scene);
         this._hexGrid = new HexGrid(this._scene);
-        this._hexGrid.generate();
+        // this._hexGrid.createMap();
         this._hexMapEditor = new HexMapEditor(this._hexGrid);
         this._hexMapEditor.attachCameraControl(this._camera);
         window.editor = this._hexMapEditor;

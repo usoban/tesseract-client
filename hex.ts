@@ -2173,6 +2173,16 @@ class HexFeatureManager {
         this._walls = Prefabs.walls(`walls_${Math.random()}`, scene);
     }
 
+    destroy(): void {
+        this._scene = null;
+        
+        this._container.dispose();
+        this._container = null;
+        
+        this._walls.dispose();
+        this._walls = null;
+    }
+
     public clear(): void {
         if (this._container) {
             this._container.dispose();
@@ -2524,6 +2534,36 @@ class HexGridChunk {
         this.features = new HexFeatureManager(scene);
 
         this.cells = new Array<HexCell>(HexMetrics.chunkSizeX * HexMetrics.chunkSizeZ);
+    }
+
+    destroy(): void {
+        this._scene = null;
+
+        this.cells.forEach((cell: HexCell) => {
+            cell.dispose();
+        });
+        this.cells = null;
+
+        this.terrain.dispose();
+        this.terrain = null;
+
+        this.rivers.dispose();
+        this.rivers = null;
+
+        this.roads.dispose();
+        this.roads = null;
+
+        this.water.dispose();
+        this.water = null;
+
+        this.waterShore.dispose();
+        this.waterShore = null;
+
+        this.estuaries.dispose();
+        this.estuaries = null;
+
+        this.features.destroy();
+        this.features = null;
     }
 
     addCell(index: number, cell: HexCell): void {
@@ -3430,39 +3470,26 @@ class HexGridChunk {
 class HexGrid {
     public static CHUNKS_TO_REFRESH: Map<string, HexGridChunk> = new Map<string, HexGridChunk>();
 
-    private cellCountX: number = 6;
-    private cellCountZ: number = 6;
-    public chunkCountX: number = 3;
-    public chunkCountZ: number = 3;
+    public cellCountX: number = 20;
+    public cellCountZ: number = 15;
+    private chunkCountX: number;
+    private chunkCountZ: number;
+
     public cells: HexCell[];
     public chunks: HexGridChunk[];
     private _scene: BABYLON.Scene;
 
     public defaultColor: BABYLON.Color4 = HexCellColor.PASTEL_BLUE;
 
-    // public static defaultGridonfiguration = {};
-    public static defaultGridonfiguration = {
-        "(0, -1, 1)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(2, -3, 1)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(3, -4, 1)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(-1, -1, 2)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(3, -5, 2)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(4, -6, 2)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(-1, -2, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(0, -3, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(1, -4, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-        "(2, -5, 3)": {color: HexCellColor.PASTEL_YELLOW, elevation: 1},
-
-        "(1, -2, 1)": {color: HexCellColor.PASTEL_GREEN, elevation: 2},
-        "(0, -2, 2)": {color: HexCellColor.PASTEL_GREEN, elevation: 2},
-        "(1, -3, 2)": {color: HexCellColor.PASTEL_GREEN, elevation: 2},
-        "(2, -4, 2)": {color: HexCellColor.PASTEL_GREEN, elevation: 2}
-    };
+    private _onAwakeObservable: BABYLON.Observable<any>;
 
     constructor(scene: BABYLON.Scene) {
         this._scene = scene;
-        this.cellCountX = this.chunkCountX * HexMetrics.chunkSizeX;
-        this.cellCountZ = this.chunkCountZ * HexMetrics.chunkSizeZ;
+        
+        this._onAwakeObservable = new BABYLON.Observable<any>();
+        this._onAwakeObservable.add(this.awake.bind(this));
+
+        this.loadResources();
     }
 
     public static refresh(): void {
@@ -3473,7 +3500,13 @@ class HexGrid {
         HexGrid.CHUNKS_TO_REFRESH = new Map<string, HexGridChunk>();
     }
 
-    generate(): void {
+    private awake() {
+        HexMetrics.initializeHashGrid(1234);
+        
+        this.createMap(this.cellCountX, this.cellCountZ);
+    }
+
+    private loadResources() {
         let texture = new BABYLON.Texture(
             './assets/gfx/material/noise.png', 
             this._scene,
@@ -3516,14 +3549,42 @@ class HexGrid {
             
             Texture.bilinearFiltered(noiseTexture, bilinearTexture, 1.0);
             HexMetrics.noiseTexture = bilinearTexture;
-            
-            HexMetrics.initializeHashGrid(1234);
 
-            this.makeChunks();
-            this.makeCells();
-
-            this.chunks.forEach(c => c.refresh());
+            this._onAwakeObservable.notifyObservers(true);
         });
+    }
+
+    public createMap(cellCountX: number, cellCountZ: number): boolean {
+        if (
+            cellCountX <= 0 || cellCountX % HexMetrics.chunkSizeX != 0 ||
+            cellCountZ <= 0 || cellCountZ % HexMetrics.chunkSizeZ != 0
+        ) {
+            console.error('Unsupported message size.');
+            alert('Unsupported message size.');
+            return false;
+        }
+
+        if (this.chunks) {
+            this.chunks.forEach((chunk: HexGridChunk) => {
+                chunk.destroy();
+            });
+
+            this.chunks = null;
+        }
+
+        this.cellCountX = cellCountX;
+        this.cellCountZ = cellCountZ;
+        this.chunkCountX = cellCountX / HexMetrics.chunkSizeX;
+        this.chunkCountZ = cellCountZ / HexMetrics.chunkSizeZ;
+
+        HexMetrics.initializeHashGrid(1234);
+
+        this.makeChunks();
+        this.makeCells();
+
+        this.chunks.forEach(c => c.refresh());
+
+        return true;
     }
 
     makeCells(): void {
@@ -3586,19 +3647,12 @@ class HexGrid {
 
         // let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene),
         //     textTexture = this.makeCellText(cell.coordinates.toString());
-
         // material.diffuseTexture = textTexture;
         // material.opacityTexture = textTexture;
         // material.specularColor = BABYLON.Color3.Black();
-
         // cell.material = material;
 
-        if (cell.coordinates.toString() in HexGrid.defaultGridonfiguration) {
-            let cfg = HexGrid.defaultGridonfiguration[cell.coordinates.toString()];
-            cell.elevation = cfg.elevation;
-        } else {
-            cell.elevation = 0;
-        }
+        cell.elevation = 0;
 
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i-1]);
@@ -3654,10 +3708,23 @@ class HexGrid {
     }
 
     public save(writer: ByteBuffer): void {
+        writer.writeInt32(this.cellCountX);
+        writer.writeInt32(this.cellCountZ);
+
         this.cells.forEach((cell: HexCell) => cell.save(writer));
     }
 
     public load(reader: ByteBuffer): void {
+        let 
+            cellCountX = reader.readInt32(),
+            cellCountZ = reader.readInt32();
+
+        if (cellCountX != this.cellCountX || cellCountZ != this.cellCountZ) {
+            if (!this.createMap(cellCountX, cellCountZ)) {
+                return;
+            }    
+        }
+
         this.cells.forEach((cell: HexCell) => cell.load(reader));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
     }
@@ -3667,119 +3734,55 @@ enum OptionalToggle {
     Ignore, Yes, No
 }
 
-class HexMapEditor {
-    public static POINTER_BLOCKED_BY_GUI = false;
+class HexMapEditorTool {
+    private _name: string;
 
-    private grid: HexGrid;
-    private _scene: BABYLON.Scene;
+    private _panel: HTMLElement;
+    private _toggle: HTMLElement;
+    private _container: HTMLElement;
+    private _isPanelOpened: boolean = false;
 
-    private _toolkitPanelOpened = false;
-    private _toolkitPanel;
-    private _toolkitPanelContainer;
-    private _toolkitPanelToogle;
-    
-    private activeTerrainTypeIndex: number;
-    private activeElevation: number = 0.0;
-    private activeWaterLevel: number = 0.0;
-    private activeUrbanLevel: number = 0.0;
-    private activeFarmLevel: number = 0.0;
-    private activePlantLevel: number = 0.0;
-    private activeSpecialIndex: number = 0;
+    constructor(name: string) {
+        this._name = name;
 
-    private isElevationSelected: boolean = false;
-    private isWaterLevelSelected: boolean = false;
-    private isUrbanLevelSelected: boolean = false;
-    private isFarmLevelSelected: boolean = false;
-    private isPlantLevelSelected: boolean = false;
-    private isSpecialIndexSelected: boolean = false;
-
-    private brushSize: number = 0;
-    private riverMode: OptionalToggle = OptionalToggle.Ignore;
-    private roadMode: OptionalToggle = OptionalToggle.Ignore;
-    private walledMode: OptionalToggle = OptionalToggle.Ignore;
-
-    private isPointerDown: boolean = false;
-    private isDrag: boolean = false;
-    private dragDirection: HexDirection;
-    private previousCell: Nullable<HexCell>;
-
-    constructor(grid: HexGrid) {
-        this.grid = grid;
-
-        this.makePanel();
+        this.init();
     }
 
-    private static enumToSelectList(enumerable: Object): Array<any> {
-        let names = Object.keys(enumerable).filter(k => typeof enumerable[k] === 'number') as string[];
-
-        return names.map(name => {
-            return {label: name, value: enumerable[name]};
-        });
+    get selector(): string {
+        return `.${this._name}`;
     }
 
-    private showPanel(): void {
-        this._toolkitPanelOpened = true;
-        this._toolkitPanel.style.webkitTransform = 'translateX(17em)';
-        this._toolkitPanel.style.transform = 'translateX(17em)';
+    get container(): HTMLElement {
+        return this._container;
     }
 
-    private hidePanel(): void {
-        this._toolkitPanelOpened = false;
-        this._toolkitPanel.style.webkitTransform = 'translateX(0px)';
-        this._toolkitPanel.style.transform = 'translateX(0px)';
-    }
+    private init(): void {
+        this._panel = document.querySelector(this.selector),
+        this._toggle = this._panel.querySelector('.guiClickableTag'),
+        this._container = this._panel.querySelector('.guiPanelContainer');
 
-    private makePanel() {
-        this._toolkitPanel = document.getElementById('guiPanel');
-        this._toolkitPanelToogle = document.getElementById('guiClickableTag');
-        this._toolkitPanelContainer = document.getElementById('guiPanelContainer');
-
-        this._toolkitPanelToogle.addEventListener('click', () => {
-            if (this._toolkitPanelOpened) {
+        this._toggle.addEventListener('click', () => {
+            if (this._isPanelOpened) {
                 this.hidePanel();
             }
             else {
                 this.showPanel();
             }
         });
-
-        let 
-            i = 0,
-            terrainTypeSelection = [{label: "Ignore", value: -1}];
-            
-        HexCellColor.colors.forEach((_v: any, key: string) => {
-            terrainTypeSelection.push({label: key, value: i++});
-        });
-        
-        this.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
-        this.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
-        this.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
-        this.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
-        this.addPanelToggleSlider("Elevation", 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
-        this.addPanelToggleSlider("Water level", 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
-        this.addPanelToggleSlider("Special", 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
-        this.addPanelToggleSlider("Urban level", 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
-        this.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
-        this.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
-        this.addPanelToggleSlider("Brush", 0, 4, 0, () => {}, this.setBrushSize.bind(this));
-
-        let 
-            btnGroup = document.createElement('div'),
-            saveBtn = document.createElement('button'),
-            loadBtn = document.createElement('input');
-
-        saveBtn.innerText = "Save";
-        // loadBtn.innerText = "Load";
-        loadBtn.type = 'File';
-
-        saveBtn.onclick = this.save.bind(this);
-        loadBtn.onchange = this.load.bind(this);
-
-        btnGroup.appendChild(saveBtn);
-        btnGroup.appendChild(loadBtn);
-
-        this._toolkitPanelContainer.appendChild(btnGroup);
     }
+
+    private showPanel(): void {
+        this._isPanelOpened = true;
+        this._panel.style.webkitTransform = 'translateX(17em)';
+        this._panel.style.transform = 'translateX(17em)';
+    }
+
+    private hidePanel(): void {
+        this._isPanelOpened = false;
+        this._panel.style.webkitTransform = 'translateX(0px)';
+        this._panel.style.transform = 'translateX(0px)';
+    }
+
 
     addPanelSelect(label: string, options: Array<any>, callbackFn): void {
         let 
@@ -3806,8 +3809,8 @@ class HexMapEditor {
         group.appendChild(groupLabel);
         group.appendChild(select);
 
-        this._toolkitPanelContainer.appendChild(group);
-        this._toolkitPanelContainer.appendChild(document.createElement('hr'));
+        this._container.appendChild(group);
+        this._container.appendChild(document.createElement('hr'));
     }
 
     addPanelToggleSlider(
@@ -3851,9 +3854,135 @@ class HexMapEditor {
         group.appendChild(groupLabel);
         group.appendChild(slider);
 
-        this._toolkitPanelContainer.appendChild(group);
-        this._toolkitPanelContainer.appendChild(document.createElement('hr'));
+        this._container.appendChild(group);
+        this._container.appendChild(document.createElement('hr'));
     }
+}
+
+class HexMapEditor {
+    public static POINTER_BLOCKED_BY_GUI = false;
+
+    private grid: HexGrid;
+    private _scene: BABYLON.Scene;
+    
+    private activeTerrainTypeIndex: number;
+    private activeElevation: number = 0.0;
+    private activeWaterLevel: number = 0.0;
+    private activeUrbanLevel: number = 0.0;
+    private activeFarmLevel: number = 0.0;
+    private activePlantLevel: number = 0.0;
+    private activeSpecialIndex: number = 0;
+
+    private isElevationSelected: boolean = false;
+    private isWaterLevelSelected: boolean = false;
+    private isUrbanLevelSelected: boolean = false;
+    private isFarmLevelSelected: boolean = false;
+    private isPlantLevelSelected: boolean = false;
+    private isSpecialIndexSelected: boolean = false;
+
+    private brushSize: number = 0;
+    private riverMode: OptionalToggle = OptionalToggle.Ignore;
+    private roadMode: OptionalToggle = OptionalToggle.Ignore;
+    private walledMode: OptionalToggle = OptionalToggle.Ignore;
+
+    private isPointerDown: boolean = false;
+    private isDrag: boolean = false;
+    private dragDirection: HexDirection;
+    private previousCell: Nullable<HexCell>;
+
+    private _editTool: HexMapEditorTool;
+
+    constructor(grid: HexGrid) {
+        this.grid = grid;
+
+        this.makePanels();
+    }
+
+    private static enumToSelectList(enumerable: Object): Array<any> {
+        let names = Object.keys(enumerable).filter(k => typeof enumerable[k] === 'number') as string[];
+
+        return names.map(name => {
+            return {label: name, value: enumerable[name]};
+        });
+    }
+
+    private makePanels() {
+
+        let
+            editPanel = new HexMapEditorTool("panel-edit"),
+            creatorPanel = new HexMapEditorTool("panel-new");
+
+        // ==========================================
+        // ============ Edit panel. =================
+        let 
+            i = 0,
+            terrainTypeSelection = [{label: "Ignore", value: -1}];
+            
+        HexCellColor.colors.forEach((_v: any, key: string) => {
+            terrainTypeSelection.push({label: key, value: i++});
+        });
+        
+        editPanel.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
+        editPanel.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
+        editPanel.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
+        editPanel.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
+        editPanel.addPanelToggleSlider("Elevation", 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
+        editPanel.addPanelToggleSlider("Water level", 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
+        editPanel.addPanelToggleSlider("Special", 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
+        editPanel.addPanelToggleSlider("Urban level", 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
+        editPanel.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
+        editPanel.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
+        editPanel.addPanelToggleSlider("Brush", 0, 4, 0, () => {}, this.setBrushSize.bind(this));
+
+        let 
+            btnGroup = document.createElement('div'),
+            saveBtn = document.createElement('button'),
+            loadBtn = document.createElement('input'),
+            newMapBtn = document.createElement('button');
+
+        saveBtn.innerText = "Save";
+        // loadBtn.innerText = "Load";
+        loadBtn.type = 'File';
+        newMapBtn.innerText = 'New Map';
+
+        saveBtn.onclick = this.save.bind(this);
+        loadBtn.onchange = this.load.bind(this);
+        newMapBtn.onclick = this.grid.createMap.bind(this.grid);
+
+        btnGroup.appendChild(saveBtn);
+        btnGroup.appendChild(loadBtn);
+        btnGroup.appendChild(newMapBtn);
+
+        editPanel.container.appendChild(btnGroup);
+
+        this._editTool = editPanel;
+
+        // ============ New panel. =================
+        // ==========================================
+
+        let 
+            newMapButtonGroup = document.createElement('div'),
+            newSmallMapBtn = document.createElement('button'),
+            newMediumMapBtn = document.createElement('button'),
+            newLargeMapBtn = document.createElement('button');
+
+        newSmallMapBtn.innerText = 'New small map';
+        newMediumMapBtn.innerText = 'New medium map';
+        newLargeMapBtn.innerText = 'New large map';
+        newSmallMapBtn.onclick = this.newSmallMap.bind(this);
+        newMediumMapBtn.onclick = this.newMediumMap.bind(this);
+        newLargeMapBtn.onclick = this.newLargeMap.bind(this);
+
+        newMapButtonGroup.appendChild(newSmallMapBtn);
+        newMapButtonGroup.appendChild(document.createElement('br'));
+        newMapButtonGroup.appendChild(newMediumMapBtn);
+        newMapButtonGroup.appendChild(document.createElement('br'));
+        newMapButtonGroup.appendChild(newLargeMapBtn);
+        newMapButtonGroup.appendChild(document.createElement('br'));
+
+        creatorPanel.container.appendChild(newMapButtonGroup);
+    }
+
 
     attachCameraControl(camera: BABYLON.FreeCamera): void {
         this._scene = camera.getScene();
@@ -4081,12 +4210,12 @@ class HexMapEditor {
     }
 
     public save(): void {
-        let saveLink = this._toolkitPanelContainer.querySelector('#download-link');
+        let saveLink = this._editTool.container.querySelector('#download-link');
 
         if (!saveLink) {
             saveLink = document.createElement('div');
             saveLink.id = 'download-link';
-            this._toolkitPanelContainer.append(saveLink);
+            this._editTool.container.append(saveLink);
         }
 
         let dataWriter = new ByteBuffer();
@@ -4110,21 +4239,31 @@ class HexMapEditor {
             f = evt.target.files[0],
             reader = new FileReader();
 
-        reader.onload = ((theFile) => {
-            return (e) => {
-                let byteBuffer = ByteBuffer.make(new DataView(e.target.result));
-                
-                let version = byteBuffer.readUint32();
-                if (version === 0) {
-                    this.grid.load(byteBuffer);
-                }
-                else {
-                    console.error("Unknown map format " + version);
-                }
+        reader.onload = (e) => {
+            let byteBuffer = ByteBuffer.make(new DataView(<ArrayBuffer>reader.result));
+            
+            let version = byteBuffer.readUint32();
+            if (version === 0) {
+                this.grid.load(byteBuffer);
+            }
+            else {
+                console.error("Unknown map format " + version);
+            }
 
-            };
-        })(f);
+        };
         
         reader.readAsArrayBuffer(f);
+    }
+
+    newSmallMap(): void {
+        this.grid.createMap(20, 15);
+    }
+
+    newMediumMap(): void {
+        this.grid.createMap(40, 30);
+    }
+
+    newLargeMap(): void {
+        this.grid.createMap(80, 60);
     }
 }
