@@ -506,27 +506,59 @@ class Prefabs {
             // Prefabs._terrainMaterial.emissiveColor = BABYLON.Color3.Black();
             // Prefabs._terrainMaterial.albedoColor = BABYLON.Color3.White();
             // Prefabs._terrainMaterial.metallic = 0;
-            // Prefabs._terrainMaterial.onBindObservable.add(() => {
-            //     if (!Prefabs._terrainMaterial.getEffect || !Prefabs._terrainMaterial.getEffect()) {
-            //         return;
-            //     }
-            //     Prefabs._terrainMaterial._effect.setTextureArray("textures[5]", [
-            //         Prefabs._sandTexture,
-            //         Prefabs._stoneTexture,
-            //         Prefabs._snowTexture,
-            //         Prefabs._mudTexture,
-            //         Prefabs._grassTexture
-            //     ]);
-            // });
+            // Prefabs._terrainMaterial.albedoTexture = Prefabs._sandTexture;
+            // Prefabs._terrainMaterial.emissiveTexture = Prefabs._stoneTexture;
+            // Prefabs._terrainMaterial.reflectionTexture = Prefabs._snowTexture;
+            // Prefabs._terrainMaterial.refractionTexture = Prefabs._mudTexture;
+            // Prefabs._terrainMaterial.microSurfaceTexture = Prefabs._grassTexture;
+            // // Prefabs._terrainMaterial.onBindObservable.add(() => {
+            // //     if (!Prefabs._terrainMaterial.getEffect || !Prefabs._terrainMaterial.getEffect()) {
+            // //         return;
+            // //     }
+            // //     Prefabs._terrainMaterial._effect.setTextureArray("textures[5]", [
+            // //         Prefabs._sandTexture,
+            // //         Prefabs._stoneTexture,
+            // //         Prefabs._snowTexture,
+            // //         Prefabs._mudTexture,
+            // //         Prefabs._grassTexture
+            // //     ]);
+            // // });
+            // Prefabs._terrainMaterial.Vertex_Definitions(`
+            //     varying vec3 vUV2;
+            // `);
+            // Prefabs._terrainMaterial.Vertex_MainEnd(`
+            //     vUV2 = uv2;
+            // `);
             // Prefabs._terrainMaterial.Fragment_Definitions(`
-            //     vec4 tex2DArray(sampler2D textures[5], vec2 uv, int idx) {
-            //         vec4 color;
-            //         return texture2D(textures[idx], uv);
+            //     varying vec3 vUV2;
+            //     vec4 tex2DArray(vec2 uv, int idx) {
+            //         if (idx == 0) {
+            //             return texture2D(albedoSampler, uv);
+            //         }
+            //         if (idx == 1) {
+            //             return texture2D(emissiveSampler, uv);
+            //         }
+            //         if (idx == 2) {
+            //             return texture2D(reflectionSampler, uv);
+            //         }
+            //         if (idx == 3) {
+            //             return texture2D(refractionSampler, uv);
+            //         }
+            //         if (idx == 4) {
+            //             return texture2D(microSurfaceSampler, uv);
+            //         }
+            //     }
+            //     vec4 getTerrainColor(vec2 pos, vec3 terrain, vec4 color, int idx) {
+            //         vec4 c = tex2DArray(pos * 0.02, int(terrain[idx]));
+            //         return c * color[idx];
             //     }
             // `);
             // Prefabs._terrainMaterial.Fragment_Custom_Albedo(`
-            //     vec2 uv = vPositionW.xz * 0.02;
-            //     vec4 c = tex2DArray(textures, uv, 0);
+            //     vec4 c = (
+            //             getTerrainColor(vPositionW.xz, vUV2, vAlbedoColor, 0) + 
+            //             getTerrainColor(vPositionW.xz, vUV2, vAlbedoColor, 1) + 
+            //             getTerrainColor(vPositionW.xz, vUV2, vAlbedoColor, 2)
+            //         );
             //     surfaceAlbedo.rgb = c.rgb * vAlbedoColor.rgb;
             //     alpha = c.a;
             // `);
@@ -537,7 +569,7 @@ class Prefabs {
                 
                 attribute vec3 position;
                 attribute vec2 uv;
-                attribute vec3 uv3;
+                attribute vec3 terrainType;
                 attribute vec4 color;
                 
                 uniform mat4 worldViewProjection;
@@ -553,7 +585,7 @@ class Prefabs {
                 
                     vPosition = position;
                     vColor = color;
-                    vUV3 = uv3;
+                    vUV3 = terrainType;
                 }
             `;
             BABYLON.Effect.ShadersStore["customPixelShader"] = `
@@ -580,7 +612,6 @@ class Prefabs {
 
                 void main(void)
                 {
-                    // vec4 _c = vec4(1.0, 1.0, 1.0, 1.0);
                     vec4 c = (
                         getTerrainColor(textures, vPosition.xz, vUV3, vColor, 0) + 
                         getTerrainColor(textures, vPosition.xz, vUV3, vColor, 1) + 
@@ -594,7 +625,7 @@ class Prefabs {
                 vertex: "custom",
                 fragment: "custom"
             }, {
-                attributes: ["position", "uv", "uv3"],
+                attributes: ["position", "uv", "terrainType"],
                 uniforms: ["worldViewProjection"],
                 samplers: ["textures"]
             });
@@ -1175,9 +1206,6 @@ class HexCell extends BABYLON.Mesh {
         this._cellPosition = position.clone();
         this.refreshMeshPosition();
     }
-    get color() {
-        return HexMetrics.colors[this._terrainTypeIndex];
-    }
     get terrainTypeIndex() {
         return this._terrainTypeIndex;
     }
@@ -1534,10 +1562,10 @@ class HexMesh extends BABYLON.Mesh {
         if (this._useUV2Coordinates) {
             vertexData.uvs2 = this._uvs2;
         }
-        if (this._useTerrainTypes) {
-            vertexData.uvs3 = this._terrainTypes;
-        }
         vertexData.applyToMesh(this, true);
+        if (this._useTerrainTypes) {
+            this.setVerticesData("terrainType", this._terrainTypes, true, 3);
+        }
         this._setReady(true);
         this.isPickable = this._useCollider;
     }
@@ -2487,7 +2515,7 @@ class HexGridChunk {
     triangulateCellCornerTerraces(begin, beginCell, left, leftCell, right, rightCell) {
         let v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), c3 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color2, 1), c4 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color3, 1), types = new BABYLON.Vector3(beginCell.terrainTypeIndex, leftCell.terrainTypeIndex, rightCell.terrainTypeIndex);
         this.terrain.addTriangle(begin, v3, v4);
-        this.terrain.addTriangleColor(beginCell.color, c3, c4);
+        this.terrain.addTriangleColor(HexGridChunk.color1, c3, c4);
         this.terrain.addTriangleTerrainTypes(types);
         let i, v1, v2, c1, c2;
         for (i = 2; i < HexMetrics.terraceSteps; i++) {
@@ -2821,7 +2849,7 @@ class HexMapEditorTool {
             let opt = document.createElement('option');
             opt.value = o.value;
             opt.innerText = o.label;
-            select.append(opt);
+            select.appendChild(opt);
         });
         group.onchange = (changeEvent) => {
             let idx = changeEvent.srcElement.selectedIndex;
@@ -3118,7 +3146,7 @@ class HexMapEditor {
         if (!saveLink) {
             saveLink = document.createElement('div');
             saveLink.id = 'download-link';
-            this._editTool.container.append(saveLink);
+            this._editTool.container.appendChild(saveLink);
         }
         let dataWriter = new ByteBuffer();
         dataWriter.writeUint32(0); // Version header.
