@@ -153,38 +153,39 @@ class Filesys {
         return ArrayBufferUtil.transfer(buffer, buffer.byteLength * 2);
     }
 }
-class HexCellColor {
-    static initialize() {
-        HexCellColor.colors = new Map();
-        HexCellColor.colors.set("Yellow", HexCellColor.PASTEL_YELLOW);
-        HexCellColor.colors.set("Green", HexCellColor.PASTEL_GREEN);
-        HexCellColor.colors.set("Blue", HexCellColor.PASTEL_BLUE);
-        HexCellColor.colors.set("Orange", HexCellColor.PASTEL_ORANGE);
-        HexCellColor.colors.set("White", HexCellColor.WHITE);
-    }
-    static getAllColors() {
-        let colors = [];
-        HexCellColor.colors.forEach(c => colors.push(c));
-        return colors;
-    }
-    static average(colors) {
-        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
-        for (let i = 0; i < colors.length; i++) {
-            avgColor.addInPlace(colors[i]);
-        }
-        avgColor.r = avgColor.r / colors.length;
-        avgColor.g = avgColor.g / colors.length;
-        avgColor.b = avgColor.b / colors.length;
-        return avgColor;
-    }
-}
-HexCellColor.BLACK = BABYLON.Color4.FromHexString("#000000ff");
-HexCellColor.WHITE = BABYLON.Color4.FromHexString("#ffffffff");
-HexCellColor.PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
-HexCellColor.PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
-HexCellColor.PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
-HexCellColor.PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
-HexCellColor.initialize();
+// class HexCellColor {
+//     public static BLACK = BABYLON.Color4.FromHexString("#000000ff");
+//     public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
+//     public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
+//     public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
+//     public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
+//     public static PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
+//     public static colors: Map<string, BABYLON.Color4>;
+//     public static initialize() {
+//         HexCellColor.colors = new Map<string, BABYLON.Color4>();
+//         HexCellColor.colors.set("Yellow", HexCellColor.PASTEL_YELLOW);
+//         HexCellColor.colors.set("Green", HexCellColor.PASTEL_GREEN);
+//         HexCellColor.colors.set("Blue", HexCellColor.PASTEL_BLUE);
+//         HexCellColor.colors.set("Orange", HexCellColor.PASTEL_ORANGE);
+//         HexCellColor.colors.set("White", HexCellColor.WHITE);
+//     }
+//     public static getAllColors(): BABYLON.Color4[] {
+//         let colors = [];
+//         HexCellColor.colors.forEach(c => colors.push(c));
+//         return colors;
+//     }
+//     public static average(colors: Array<BABYLON.Color4>): BABYLON.Color4 {
+//         let avgColor = new BABYLON.Color4(0, 0, 0, 0);
+//         for (let i = 0; i < colors.length; i++) {
+//             avgColor.addInPlace(colors[i]);
+//         }
+//         avgColor.r = avgColor.r / colors.length;
+//         avgColor.g = avgColor.g / colors.length;
+//         avgColor.b = avgColor.b / colors.length;
+//         return avgColor;
+//     }
+// }
+// HexCellColor.initialize();
 class HexMetrics {
     static getFirstCorner(direction) {
         return HexMetrics.corners[direction];
@@ -331,7 +332,6 @@ HexMetrics.corners = [
     new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
     new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius)
 ];
-HexMetrics.colors = HexCellColor.getAllColors();
 class Texture {
     constructor(data, width, height) {
         this.data = data;
@@ -2595,7 +2595,6 @@ class HexGrid {
     constructor(scene) {
         this.cellCountX = 20;
         this.cellCountZ = 15;
-        this.defaultColor = HexCellColor.PASTEL_BLUE;
         this._scene = scene;
         this._onAwakeObservable = new BABYLON.Observable();
         this._onAwakeObservable.add(this.awake.bind(this));
@@ -2887,10 +2886,14 @@ class HexMapEditor {
         let editPanel = new HexMapEditorTool("panel-edit"), creatorPanel = new HexMapEditorTool("panel-new");
         // ==========================================
         // ============ Edit panel. =================
-        let i = 0, terrainTypeSelection = [{ label: "Ignore", value: -1 }];
-        HexCellColor.colors.forEach((_v, key) => {
-            terrainTypeSelection.push({ label: key, value: i++ });
-        });
+        let i = 0, terrainTypeSelection = [
+            { label: "Ignore", value: -1 },
+            { label: "Sand", value: 0 },
+            { label: "Grass", value: 1 },
+            { label: "Mud", value: 2 },
+            { label: "Stone", value: 3 },
+            { label: "Snow", value: 4 }
+        ];
         editPanel.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
         editPanel.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
         editPanel.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));

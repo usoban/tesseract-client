@@ -211,49 +211,6 @@ class Filesys {
     }
 }
 
-class HexCellColor {
-    public static BLACK = BABYLON.Color4.FromHexString("#000000ff");
-    public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
-    public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
-    public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
-    public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
-    public static PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
-    public static colors: Map<string, BABYLON.Color4>;
-
-    public static initialize() {
-        HexCellColor.colors = new Map<string, BABYLON.Color4>();
-
-        HexCellColor.colors.set("Yellow", HexCellColor.PASTEL_YELLOW);
-        HexCellColor.colors.set("Green", HexCellColor.PASTEL_GREEN);
-        HexCellColor.colors.set("Blue", HexCellColor.PASTEL_BLUE);
-        HexCellColor.colors.set("Orange", HexCellColor.PASTEL_ORANGE);
-        HexCellColor.colors.set("White", HexCellColor.WHITE);
-    }
-
-    public static getAllColors(): BABYLON.Color4[] {
-        let colors = [];
-
-        HexCellColor.colors.forEach(c => colors.push(c));
-
-        return colors;
-    }
-
-    public static average(colors: Array<BABYLON.Color4>): BABYLON.Color4 {
-        let avgColor = new BABYLON.Color4(0, 0, 0, 0);
-
-        for (let i = 0; i < colors.length; i++) {
-            avgColor.addInPlace(colors[i]);
-        }
-
-        avgColor.r = avgColor.r / colors.length;
-        avgColor.g = avgColor.g / colors.length;
-        avgColor.b = avgColor.b / colors.length;
-
-        return avgColor;
-    }
-}
-HexCellColor.initialize();
-
 class HexMetrics {
     public static outerToInner = 0.866025404;
     public static innerToOuter = 1.0 / HexMetrics.outerToInner;
@@ -301,8 +258,6 @@ class HexMetrics {
         new BABYLON.Vector3(-HexMetrics.innerRadius, 0.0, 0.5 * HexMetrics.outerRadius),
         new BABYLON.Vector3(0.0, 0.0, HexMetrics.outerRadius)
     ];
-
-    public static colors: BABYLON.Color4[] = HexCellColor.getAllColors();
 
     public static getFirstCorner(direction: HexDirection): BABYLON.Vector3 {
         return HexMetrics.corners[direction];
@@ -793,9 +748,9 @@ class Prefabs {
                     // NOTE: apparently, we cannot do just this:
                     //      return texture2D(texturesArray[idx], uv);
                     //
-                    // So we need to sample all textures otherwise the results are
-                    // incorrect on some hardware (AMD RX580 did not work, Intel HD did work).
-                    // This is due to "non-uniform flow control":
+                    // We need to sample all textures otherwise the results are incorrect 
+                    // on some hardware (e.g., on AMD RX580 it did not work, but on Intel HD it did).
+                    // Not sure if this is exactly it, but the workaround was inspired by "non-uniform flow control":
                     // https://www.khronos.org/opengl/wiki/Sampler_(GLSL)#Non-uniform_flow_control
 
                     vec4 s0 = texture2D(texturesArray[0], uv);
@@ -3742,8 +3697,6 @@ class HexGrid {
     public chunks: HexGridChunk[];
     private _scene: BABYLON.Scene;
 
-    public defaultColor: BABYLON.Color4 = HexCellColor.PASTEL_BLUE;
-
     private _onAwakeObservable: BABYLON.Observable<any>;
 
     constructor(scene: BABYLON.Scene) {
@@ -4192,11 +4145,14 @@ class HexMapEditor {
         // ============ Edit panel. =================
         let 
             i = 0,
-            terrainTypeSelection = [{label: "Ignore", value: -1}];
-            
-        HexCellColor.colors.forEach((_v: any, key: string) => {
-            terrainTypeSelection.push({label: key, value: i++});
-        });
+            terrainTypeSelection = [
+                {label: "Ignore", value: -1},
+                {label: "Sand", value: 0},
+                {label: "Grass", value: 1},
+                {label: "Mud", value: 2},
+                {label: "Stone", value: 3},
+                {label: "Snow", value: 4}
+            ];
         
         editPanel.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
         editPanel.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
