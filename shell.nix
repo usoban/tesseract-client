@@ -9,5 +9,5 @@ with pkgs;
 mkShell {
   # Sets the build inputs, i.e. what will be available in our
   # local environment.
-  buildInputs = [ nodejs nodePackages.typescript ];
+  buildInputs = [ nodejs nodePackages.typescript python27 ];
 }
