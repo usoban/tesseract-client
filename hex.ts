@@ -615,6 +615,7 @@ class Prefabs {
     private static _snowTexture: BABYLON.Texture;
     private static _mudTexture: BABYLON.Texture;
     private static _grassTexture: BABYLON.Texture;
+    private static _gridTexture: BABYLON.Texture;
 
     private static _foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
@@ -680,9 +681,9 @@ class Prefabs {
 
     public static loadResources(scene: BABYLON.Scene): Promise<any> {
         let 
-            makeTexture = (path: string): BABYLON.Texture => {
+            makeTexture = (path: string, format: number = BABYLON.Engine.TEXTUREFORMAT_RGBA): BABYLON.Texture => {
                 return new BABYLON.Texture(path, scene, false, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, 
-                    null, null, null, null, BABYLON.Engine.TEXTUREFORMAT_RGBA);
+                    null, null, null, null, format);
             },
             makePromise = (texture: BABYLON.Texture) => {
                 return new Promise((resolve) => {
@@ -697,8 +698,10 @@ class Prefabs {
         Prefabs._snowTexture = makeTexture('./assets/gfx/material/snow.png');
         Prefabs._mudTexture = makeTexture('./assets/gfx/material/mud.png');
         Prefabs._grassTexture = makeTexture('./assets/gfx/material/grass.png');
+        Prefabs._gridTexture = makeTexture('./assets/gfx/material/grid.png');
 
         return Promise.all([
+            makePromise(Prefabs._gridTexture),
             makePromise(Prefabs._sandTexture),
             makePromise(Prefabs._stoneTexture),
             makePromise(Prefabs._snowTexture),
@@ -738,6 +741,7 @@ class Prefabs {
                 precision highp float;
                 
                 uniform sampler2D textures[5];
+                uniform sampler2D grid;
                 
                 varying vec3 vPosition;
                 varying vec2 vUV;
@@ -793,7 +797,13 @@ class Prefabs {
                         getTerrainColor(textures, vPosition.xz, vUV3, vColor, 2)
                     );
 
-                    gl_FragColor = c;
+                    vec2 gridUV = vPosition.xz;
+                    gridUV.x *= 1.0 / (4.0 * 8.66025404);
+                    gridUV.y *= 1.0 / (2.0 * 15.0);
+
+                    vec4 gridC = texture2D(grid, gridUV);
+
+                    gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
                 }
             `;
 
@@ -807,12 +817,14 @@ class Prefabs {
                 {
                     attributes: ["position", "color", "uv", "terrainType"],
                     uniforms: ["worldViewProjection"],
-                    samplers: ["textures"]
+                    samplers: ["textures", "grid"]
                 }
             );
 
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
             
+            Prefabs._terrainMaterial.setTexture("grid", Prefabs._gridTexture);
+
             Prefabs._terrainMaterial.setTextureArray("textures", [
                 Prefabs._sandTexture,
                 Prefabs._grassTexture,

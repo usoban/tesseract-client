@@ -153,39 +153,6 @@ class Filesys {
         return ArrayBufferUtil.transfer(buffer, buffer.byteLength * 2);
     }
 }
-// class HexCellColor {
-//     public static BLACK = BABYLON.Color4.FromHexString("#000000ff");
-//     public static WHITE = BABYLON.Color4.FromHexString("#ffffffff");
-//     public static PASTEL_BLUE = BABYLON.Color4.FromHexString("#1338d6ff");
-//     public static PASTEL_YELLOW = BABYLON.Color4.FromHexString("#ffdc00ff");
-//     public static PASTEL_GREEN = BABYLON.Color4.FromHexString("#01ae08ff");
-//     public static PASTEL_ORANGE = BABYLON.Color4.FromHexString("#ff4e1bff");
-//     public static colors: Map<string, BABYLON.Color4>;
-//     public static initialize() {
-//         HexCellColor.colors = new Map<string, BABYLON.Color4>();
-//         HexCellColor.colors.set("Yellow", HexCellColor.PASTEL_YELLOW);
-//         HexCellColor.colors.set("Green", HexCellColor.PASTEL_GREEN);
-//         HexCellColor.colors.set("Blue", HexCellColor.PASTEL_BLUE);
-//         HexCellColor.colors.set("Orange", HexCellColor.PASTEL_ORANGE);
-//         HexCellColor.colors.set("White", HexCellColor.WHITE);
-//     }
-//     public static getAllColors(): BABYLON.Color4[] {
-//         let colors = [];
-//         HexCellColor.colors.forEach(c => colors.push(c));
-//         return colors;
-//     }
-//     public static average(colors: Array<BABYLON.Color4>): BABYLON.Color4 {
-//         let avgColor = new BABYLON.Color4(0, 0, 0, 0);
-//         for (let i = 0; i < colors.length; i++) {
-//             avgColor.addInPlace(colors[i]);
-//         }
-//         avgColor.r = avgColor.r / colors.length;
-//         avgColor.g = avgColor.g / colors.length;
-//         avgColor.b = avgColor.b / colors.length;
-//         return avgColor;
-//     }
-// }
-// HexCellColor.initialize();
 class HexMetrics {
     static getFirstCorner(direction) {
         return HexMetrics.corners[direction];
@@ -477,8 +444,8 @@ class HexHash {
 }
 class Prefabs {
     static loadResources(scene) {
-        let makeTexture = (path) => {
-            return new BABYLON.Texture(path, scene, false, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, null, null, null, null, BABYLON.Engine.TEXTUREFORMAT_RGBA);
+        let makeTexture = (path, format = BABYLON.Engine.TEXTUREFORMAT_RGBA) => {
+            return new BABYLON.Texture(path, scene, false, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE, null, null, null, null, format);
         }, makePromise = (texture) => {
             return new Promise((resolve) => {
                 texture.onLoadObservable.addOnce(() => {
@@ -491,12 +458,14 @@ class Prefabs {
         Prefabs._snowTexture = makeTexture('./assets/gfx/material/snow.png');
         Prefabs._mudTexture = makeTexture('./assets/gfx/material/mud.png');
         Prefabs._grassTexture = makeTexture('./assets/gfx/material/grass.png');
+        Prefabs._gridTexture = makeTexture('./assets/gfx/material/grid.png');
         return Promise.all([
+            makePromise(Prefabs._gridTexture),
             makePromise(Prefabs._sandTexture),
             makePromise(Prefabs._stoneTexture),
             makePromise(Prefabs._snowTexture),
+            makePromise(Prefabs._grassTexture),
             makePromise(Prefabs._mudTexture),
-            makePromise(Prefabs._grassTexture)
         ]);
     }
     static terrainMaterial(scene) {
@@ -529,6 +498,7 @@ class Prefabs {
                 precision highp float;
                 
                 uniform sampler2D textures[5];
+                uniform sampler2D grid;
                 
                 varying vec3 vPosition;
                 varying vec2 vUV;
@@ -539,9 +509,9 @@ class Prefabs {
                     // NOTE: apparently, we cannot do just this:
                     //      return texture2D(texturesArray[idx], uv);
                     //
-                    // So we need to sample all textures otherwise the results are
-                    // incorrect on some hardware (AMD RX580 did not work, Intel HD did work).
-                    // This is due to "non-uniform flow control":
+                    // We need to sample all textures otherwise the results are incorrect 
+                    // on some hardware (e.g., on AMD RX580 it did not work, but on Intel HD it did).
+                    // Not sure if this is exactly it, but the workaround was inspired by "non-uniform flow control":
                     // https://www.khronos.org/opengl/wiki/Sampler_(GLSL)#Non-uniform_flow_control
 
                     vec4 s0 = texture2D(texturesArray[0], uv);
@@ -584,7 +554,13 @@ class Prefabs {
                         getTerrainColor(textures, vPosition.xz, vUV3, vColor, 2)
                     );
 
-                    gl_FragColor = c;
+                    vec2 gridUV = vPosition.xz;
+                    gridUV.x *= 1.0 / (4.0 * 8.66025404);
+                    gridUV.y *= 1.0 / (2.0 * 15.0);
+
+                    vec4 gridC = texture2D(grid, gridUV);
+
+                    gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
                 }
             `;
             Prefabs._terrainMaterial = new BABYLON.ShaderMaterial("customPixelShader", scene, {
@@ -593,9 +569,10 @@ class Prefabs {
             }, {
                 attributes: ["position", "color", "uv", "terrainType"],
                 uniforms: ["worldViewProjection"],
-                samplers: ["textures"]
+                samplers: ["textures", "grid"]
             });
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._terrainMaterial.setTexture("grid", Prefabs._gridTexture);
             Prefabs._terrainMaterial.setTextureArray("textures", [
                 Prefabs._sandTexture,
                 Prefabs._grassTexture,
