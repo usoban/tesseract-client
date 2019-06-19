@@ -598,6 +598,9 @@ class HexHash {
 }
 
 class Prefabs {
+    public static GRID_ON = "#define GRID_ON";
+    private static GRID_STATUS: boolean = false;
+
     private static _terrainMaterial: BABYLON.ShaderMaterial;
     private static _riverMaterial: BABYLON.PBRCustomMaterial;
     private static _roadMaterial: BABYLON.PBRCustomMaterial;
@@ -710,6 +713,24 @@ class Prefabs {
         ]);
     }
 
+    public static toggleTerrainGrid(): void {
+        Prefabs.GRID_STATUS = !Prefabs.GRID_STATUS;
+
+        if (Prefabs._terrainMaterial) {
+            if (Prefabs.GRID_STATUS) {
+                Prefabs._terrainMaterial.options.defines.push(Prefabs.GRID_ON);
+            }
+            else {
+                Prefabs._terrainMaterial.options.defines.splice(
+                    Prefabs._terrainMaterial.options.defines.indexOf(Prefabs.GRID_ON),
+                    1
+                );
+            }
+
+            Prefabs._terrainMaterial.markAsDirty(1);
+        }
+    }
+
     private static terrainMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._terrainMaterial) {
             BABYLON.Effect.ShadersStore["customVertexShader"] = `
@@ -740,7 +761,7 @@ class Prefabs {
             BABYLON.Effect.ShadersStore["customPixelShader"] = `
                 precision highp float;
                 
-                uniform sampler2D textures[5];
+                uniform sampler2D textures[6];
                 uniform sampler2D grid;
                 
                 varying vec3 vPosition;
@@ -748,7 +769,7 @@ class Prefabs {
                 varying vec4 vColor;
                 varying vec3 vUV3;
                 
-                vec4 tex2DArray(sampler2D texturesArray[5], vec2 uv, int idx) {
+                vec4 tex2DArray(sampler2D texturesArray[6], vec2 uv, int idx) {
                     // NOTE: apparently, we cannot do just this:
                     //      return texture2D(texturesArray[idx], uv);
                     //
@@ -783,7 +804,7 @@ class Prefabs {
                     return vec4(1.0, 0.0, 0.0, 1.0);
                 }
 
-                vec4 getTerrainColor(sampler2D texturesArray[5], vec2 pos, vec3 terrain, vec4 color, int idx) {
+                vec4 getTerrainColor(sampler2D texturesArray[6], vec2 pos, vec3 terrain, vec4 color, int idx) {
                     vec4 c = tex2DArray(texturesArray, pos * 0.02, int(terrain[idx]));
 
                     return c * color[idx];
@@ -801,7 +822,11 @@ class Prefabs {
                     gridUV.x *= 1.0 / (4.0 * 8.66025404);
                     gridUV.y *= 1.0 / (2.0 * 15.0);
 
-                    vec4 gridC = texture2D(grid, gridUV);
+                    vec4 gridC = vec4(1.0, 1.0, 1.0, 1.0);
+                    
+                    #if defined(GRID_ON)
+                    gridC = texture2D(textures[5], gridUV);
+                    #endif
 
                     gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
                 }
@@ -817,20 +842,22 @@ class Prefabs {
                 {
                     attributes: ["position", "color", "uv", "terrainType"],
                     uniforms: ["worldViewProjection"],
-                    samplers: ["textures", "grid"]
+                    samplers: ["textures"],
+                    defines: Prefabs.GRID_STATUS ? [Prefabs.GRID_ON] : []
                 }
             );
 
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
-            
-            Prefabs._terrainMaterial.setTexture("grid", Prefabs._gridTexture);
 
             Prefabs._terrainMaterial.setTextureArray("textures", [
                 Prefabs._sandTexture,
                 Prefabs._grassTexture,
                 Prefabs._mudTexture,
                 Prefabs._stoneTexture,
-                Prefabs._snowTexture
+                Prefabs._snowTexture,
+
+                // TODO: move this out of texture array once they fix the bug.
+                Prefabs._gridTexture
             ]);
         }
 
@@ -4024,6 +4051,26 @@ class HexMapEditorTool {
         this._panel.style.transform = 'translateX(0px)';
     }
 
+    addPanelCheckbox(label: string, callbackFn): void {
+        let
+            group = document.createElement('div'),
+            toggleLabel = document.createElement('label'),
+            toggle = document.createElement('input');
+
+        toggle.type = 'checkbox';
+        toggle.value = '';
+        toggle.onclick = (event: any) => {
+            callbackFn(event.srcElement.checked);
+        };
+
+        toggleLabel.innerText = label;
+
+        group.appendChild(toggle);
+        group.appendChild(toggleLabel);
+
+        this._container.appendChild(group);
+        this._container.appendChild(document.createElement('hr')); 
+    }
 
     addPanelSelect(label: string, options: Array<any>, callbackFn): void {
         let 
@@ -4132,6 +4179,7 @@ class HexMapEditor {
     private previousCell: Nullable<HexCell>;
 
     private _editTool: HexMapEditorTool;
+    private _editMode: boolean = false;
 
     constructor(grid: HexGrid) {
         this.grid = grid;
@@ -4177,6 +4225,8 @@ class HexMapEditor {
         editPanel.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
         editPanel.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
         editPanel.addPanelToggleSlider("Brush", 0, 4, 0, () => {}, this.setBrushSize.bind(this));
+        editPanel.addPanelCheckbox("Grid", this.toggleGrid.bind(this));
+        editPanel.addPanelCheckbox("Edit", this.toggleEdit.bind(this));
 
         let 
             btnGroup = document.createElement('div'),
@@ -4253,7 +4303,10 @@ class HexMapEditor {
                 this.isDrag = false;
             }
 
-            this.editCells(currentCell);
+            if (this._editMode) {
+                this.editCells(currentCell);
+            }
+
             this.previousCell = currentCell;
         } else {
             this.previousCell = null;
@@ -4451,6 +4504,14 @@ class HexMapEditor {
         }
 
         this.walledMode = parseInt(mode);
+    }
+
+    toggleGrid(_state: boolean): void {
+        Prefabs.toggleTerrainGrid();
+    }
+
+    toggleEdit(state: boolean): void {
+        this._editMode = state;
     }
 
     public save(): void {
