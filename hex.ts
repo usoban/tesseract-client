@@ -761,7 +761,7 @@ class Prefabs {
             BABYLON.Effect.ShadersStore["customPixelShader"] = `
                 precision highp float;
                 
-                uniform sampler2D textures[6];
+                uniform sampler2D textures[5];
                 uniform sampler2D grid;
                 
                 varying vec3 vPosition;
@@ -769,7 +769,7 @@ class Prefabs {
                 varying vec4 vColor;
                 varying vec3 vUV3;
                 
-                vec4 tex2DArray(sampler2D texturesArray[6], vec2 uv, int idx) {
+                vec4 tex2DArray(sampler2D texturesArray[5], vec2 uv, int idx) {
                     // NOTE: apparently, we cannot do just this:
                     //      return texture2D(texturesArray[idx], uv);
                     //
@@ -804,7 +804,7 @@ class Prefabs {
                     return vec4(1.0, 0.0, 0.0, 1.0);
                 }
 
-                vec4 getTerrainColor(sampler2D texturesArray[6], vec2 pos, vec3 terrain, vec4 color, int idx) {
+                vec4 getTerrainColor(sampler2D texturesArray[5], vec2 pos, vec3 terrain, vec4 color, int idx) {
                     vec4 c = tex2DArray(texturesArray, pos * 0.02, int(terrain[idx]));
 
                     return c * color[idx];
@@ -825,7 +825,7 @@ class Prefabs {
                     vec4 gridC = vec4(1.0, 1.0, 1.0, 1.0);
                     
                     #if defined(GRID_ON)
-                    gridC = texture2D(textures[5], gridUV);
+                    gridC = texture2D(grid, gridUV);
                     #endif
 
                     gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
@@ -842,7 +842,7 @@ class Prefabs {
                 {
                     attributes: ["position", "color", "uv", "terrainType"],
                     uniforms: ["worldViewProjection"],
-                    samplers: ["textures"],
+                    samplers: ["textures", "grid"],
                     defines: Prefabs.GRID_STATUS ? [Prefabs.GRID_ON] : []
                 }
             );
@@ -854,11 +854,10 @@ class Prefabs {
                 Prefabs._grassTexture,
                 Prefabs._mudTexture,
                 Prefabs._stoneTexture,
-                Prefabs._snowTexture,
-
-                // TODO: move this out of texture array once they fix the bug.
-                Prefabs._gridTexture
+                Prefabs._snowTexture
             ]);
+
+            Prefabs._terrainMaterial.setTexture("grid", Prefabs._gridTexture);
         }
 
         return Prefabs._terrainMaterial;
