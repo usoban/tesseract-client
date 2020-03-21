@@ -12,9 +12,10 @@
     <!-- Link to pep.js to ensure pointer events work consistently in all browsers -->
     <script src="https://code.jquery.com/pep/0.4.1/pep.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/seedrandom/3.0.1/seedrandom.min.js"></script>
-    <script src="hex_camera.js"></script>
-    <script src="hex.js"></script>
-    <script src="game.js"></script>
+    <script src="hex_camera.js" type="module"></script>
+    <script src="hex.js" type="module"></script>
+    <script src="phoenix.js" type="module"></script>
+    <script src="game.js" type="module"></script>
     <style>
         html, body {
             overflow: hidden;
@@ -94,6 +95,23 @@
             background-color: green;
             height: 1em;
         }
+        
+        .gui-bottom {
+            width: 100%;
+            height: 150px;
+            position: fixed;
+            bottom: 0;
+            background-color: blanchedalmond;
+            border-top: 5px solid black;
+        }
+        .gui-bottom .turn-btn {
+            float: right;
+            width: 100px;
+            height: 100%;
+            border-left: 5px solid black;
+            /* background: url('assets/gfx/next-turn.png') no-repeat; */
+            /* background-size: contain; */
+        }
     </style>
 </head>
 <body>
@@ -113,10 +131,18 @@
         <div class="guiTag guiClickableTag"></div>
     </div>
 
-    <script type="text/javascript">
+    <div class="gui-bottom">
+        <div class="turn-btn">
+            <img src="assets/gfx/next-turn.png">
+        </div>
+    </div>
+
+    <script type="module">
+        import {Game} from "./game.js";
+
         window.addEventListener('DOMContentLoaded', () => {
             // Create the game using the 'renderCanvas'.
-            let game = new Game('renderCanvas');
+            let game = new Game.Client('renderCanvas');
             // Create the scene.
             game.createScene();
             // Start render loop.

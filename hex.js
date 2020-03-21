@@ -1439,7 +1439,7 @@ class HexCell extends BABYLON.Mesh {
     load(reader) {
         this._terrainTypeIndex = reader.readUint8();
         this._elevation = reader.readInt8();
-        this.refreshPosition();
+        this.refreshPosition(); // SUMLJIVO!!!! (od takih stvari so weird bugi ;)
         this._waterLevel = reader.readInt8();
         this._urbanLevel = reader.readUint8();
         this._farmLevel = reader.readUint8();
@@ -1466,6 +1466,23 @@ class HexCell extends BABYLON.Mesh {
         for (let i = 0; i < this.roads.length; i++) {
             this.roads[i] = (roadFlags & (1 << i)) != 0;
         }
+    }
+    loadFromObject(cell) {
+        this._terrainTypeIndex = cell.terrain_type_index;
+        this._elevation = cell.elevation;
+        this.refreshPosition();
+        this._waterLevel = cell.water_level;
+        this._urbanLevel = cell.urban_level;
+        this._farmLevel = cell.farm_level;
+        this._plantLevel = cell.plant_level;
+        this._specialIndex = cell.special_index;
+        this._walled = cell.walled;
+        // TODO
+        this._hasIncomingRiver = false;
+        this._incomingRiver = 0;
+        this._hasOutgoingRiver = false;
+        this._outgoingRiver = 0;
+        this.roads = [];
     }
 }
 HexCell.CELL_OVERLAY_ELEVATION = 0.1;
@@ -2587,10 +2604,12 @@ class HexGridChunk {
 HexGridChunk.color1 = new BABYLON.Color4(1, 0, 0, 1);
 HexGridChunk.color2 = new BABYLON.Color4(0, 1, 0, 1);
 HexGridChunk.color3 = new BABYLON.Color4(0, 0, 1, 1);
-class HexGrid {
+export class HexGrid {
     constructor(scene) {
         this.cellCountX = 20;
         this.cellCountZ = 15;
+        this._isLoaded = false;
+        this._onLoaded = [];
         this._scene = scene;
         this._onAwakeObservable = new BABYLON.Observable();
         this._onAwakeObservable.add(this.awake.bind(this));
@@ -2603,8 +2622,19 @@ class HexGrid {
         HexGrid.CHUNKS_TO_REFRESH = new Map();
     }
     awake() {
+        this._isLoaded = true;
         HexMetrics.initializeHashGrid(1234);
         this.createMap(this.cellCountX, this.cellCountZ);
+        this._onLoaded.forEach(f => f());
+        this._onLoaded = null;
+    }
+    onLoaded(f) {
+        if (this._isLoaded) {
+            f();
+        }
+        else {
+            this._onLoaded.push(f);
+        }
     }
     loadResources() {
         Promise
@@ -2760,6 +2790,18 @@ class HexGrid {
         this.cells.forEach((cell) => cell.load(reader));
         this.chunks.forEach((chunk) => chunk.refresh());
     }
+    loadFromObject(grid) {
+        console.log(grid);
+        let cellCountX = grid.cell_count_x, cellCountZ = grid.cell_count_z;
+        if (cellCountX != this.cellCountX || cellCountZ != this.cellCountZ) {
+            if (!this.createMap(cellCountX, cellCountZ)) {
+                return;
+            }
+        }
+        let cells = Object.keys(grid.cells).map(k => grid.cells[k]);
+        this.cells.forEach((cell) => cell.loadFromObject(cells.shift()));
+        this.chunks.forEach((chunk) => chunk.refresh());
+    }
 }
 HexGrid.CHUNKS_TO_REFRESH = new Map();
 var OptionalToggle;
@@ -2862,8 +2904,8 @@ class HexMapEditorTool {
         this._container.appendChild(document.createElement('hr'));
     }
 }
-class HexMapEditor {
-    constructor(grid) {
+export class HexMapEditor {
+    constructor(grid, net) {
         this.activeElevation = 0.0;
         this.activeWaterLevel = 0.0;
         this.activeUrbanLevel = 0.0;
@@ -2884,6 +2926,7 @@ class HexMapEditor {
         this.isDrag = false;
         this._editMode = false;
         this.grid = grid;
+        this._net = net;
         this.makePanels();
     }
     static enumToSelectList(enumerable) {
@@ -3009,10 +3052,13 @@ class HexMapEditor {
         if (!cell) {
             return;
         }
+        let cmd = { name: 'hex_cell.change', changes: [], hex_cell_coordinates: cell.coordinates };
         if (this.activeTerrainTypeIndex >= 0) {
+            cmd.changes.push({ property: 'terrain_type_index', prev_value: cell.terrainTypeIndex, new_value: this.activeTerrainTypeIndex });
             cell.terrainTypeIndex = this.activeTerrainTypeIndex;
         }
         if (this.isElevationSelected) {
+            cmd.changes.push({ property: 'elevation', prev_value: cell.elevation, new_value: this.activeElevation });
             cell.elevation = this.activeElevation;
         }
         if (this.isWaterLevelSelected) {
@@ -3049,6 +3095,9 @@ class HexMapEditor {
                     otherCell.addRoad(this.dragDirection);
                 }
             }
+        }
+        if (this._net) {
+            this._net.pushCommand(cmd);
         }
     }
     editCells(centerCell) {

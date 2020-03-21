@@ -1,5 +1,5 @@
 ///<reference path="babylon.d.ts" />
-class HexGridFreeCameraMouseInput extends BABYLON.FreeCameraMouseInput {
+export class HexGridFreeCameraMouseInput extends BABYLON.FreeCameraMouseInput {
     constructor() {
         // /**
         //  * Defines the camera the input is attached to.

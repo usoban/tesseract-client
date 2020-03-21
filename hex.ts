@@ -2,6 +2,8 @@
 ///<reference path="babylon.gui.d.ts" />
 ///<reference path="babylonjs.materials.module.d.ts" />
 
+import { Game } from "./game";
+
 type Nullable<T> = T | null;
 
 class ArrayBufferUtil {
@@ -1927,7 +1929,7 @@ class HexCell extends BABYLON.Mesh {
     public load(reader: ByteBuffer): void {
         this._terrainTypeIndex = reader.readUint8();
         this._elevation = reader.readInt8();
-        this.refreshPosition();
+        this.refreshPosition(); // SUMLJIVO!!!! (od takih stvari so weird bugi ;)
         this._waterLevel = reader.readInt8();
         this._urbanLevel = reader.readUint8();
         this._farmLevel = reader.readUint8();
@@ -1957,6 +1959,25 @@ class HexCell extends BABYLON.Mesh {
         for (let i = 0; i < this.roads.length; i++) {
             this.roads[i] = (roadFlags & (1 << i)) != 0;
         }
+    }
+
+    public loadFromObject(cell: any): void {
+        this._terrainTypeIndex = cell.terrain_type_index;
+        this._elevation = cell.elevation;
+        this.refreshPosition();
+        this._waterLevel = cell.water_level;
+        this._urbanLevel = cell.urban_level;
+        this._farmLevel = cell.farm_level;
+        this._plantLevel = cell.plant_level;
+        this._specialIndex = cell.special_index;
+        this._walled = cell.walled;
+        
+        // TODO
+        this._hasIncomingRiver = false;
+        this._incomingRiver = 0;
+        this._hasOutgoingRiver = false;
+        this._outgoingRiver = 0;
+        this.roads = [];
     }
 }
 
@@ -3723,7 +3744,7 @@ class HexGridChunk {
     }
 }
 
-class HexGrid {
+export class HexGrid {
     public static CHUNKS_TO_REFRESH: Map<string, HexGridChunk> = new Map<string, HexGridChunk>();
 
     public cellCountX: number = 20;
@@ -3736,6 +3757,8 @@ class HexGrid {
     private _scene: BABYLON.Scene;
 
     private _onAwakeObservable: BABYLON.Observable<any>;
+    private _isLoaded: boolean = false;
+    private _onLoaded: Function[] = [];
 
     constructor(scene: BABYLON.Scene) {
         this._scene = scene;
@@ -3755,9 +3778,21 @@ class HexGrid {
     }
 
     private awake() {
+        this._isLoaded = true;
         HexMetrics.initializeHashGrid(1234);
         
         this.createMap(this.cellCountX, this.cellCountZ);
+
+        this._onLoaded.forEach(f => f());
+        this._onLoaded = null;
+    }
+
+    public onLoaded(f: Function): void {
+        if (this._isLoaded) {
+            f();
+        } else {
+            this._onLoaded.push(f);
+        }
     }
 
     private loadResources() {
@@ -3995,6 +4030,24 @@ class HexGrid {
         this.cells.forEach((cell: HexCell) => cell.load(reader));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
     }
+
+    public loadFromObject(grid: any): void {
+        console.log(grid)
+        let 
+            cellCountX = grid.cell_count_x,
+            cellCountZ = grid.cell_count_z;
+
+        if (cellCountX != this.cellCountX || cellCountZ != this.cellCountZ) {
+            if (!this.createMap(cellCountX, cellCountZ)) {
+                return;
+            }    
+        }
+
+        let cells = Object.keys(grid.cells).map(k => grid.cells[k]);
+
+        this.cells.forEach((cell: HexCell) => cell.loadFromObject(cells.shift()));
+        this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
+    }
 }
 
 enum OptionalToggle {
@@ -4146,10 +4199,11 @@ class HexMapEditorTool {
     }
 }
 
-class HexMapEditor {
+export class HexMapEditor {
     public static POINTER_BLOCKED_BY_GUI = false;
 
     private grid: HexGrid;
+    private _net: Game.Net;
     private _scene: BABYLON.Scene;
     
     private activeTerrainTypeIndex: number;
@@ -4180,8 +4234,9 @@ class HexMapEditor {
     private _editTool: HexMapEditorTool;
     private _editMode: boolean = false;
 
-    constructor(grid: HexGrid) {
+    constructor(grid: HexGrid, net: Game.Net) {
         this.grid = grid;
+        this._net = net;
 
         this.makePanels();
     }
@@ -4354,11 +4409,15 @@ class HexMapEditor {
             return;
         }
 
+        let cmd = {name: 'hex_cell.change', changes: [], hex_cell_coordinates: cell.coordinates};
+
         if (this.activeTerrainTypeIndex >= 0) {
+            cmd.changes.push({property: 'terrain_type_index', prev_value: cell.terrainTypeIndex, new_value: this.activeTerrainTypeIndex});
             cell.terrainTypeIndex = this.activeTerrainTypeIndex;
         }
 
         if (this.isElevationSelected) {
+            cmd.changes.push({property: 'elevation', prev_value: cell.elevation, new_value: this.activeElevation});
             cell.elevation = this.activeElevation;
         }
 
@@ -4405,6 +4464,10 @@ class HexMapEditor {
                     otherCell.addRoad(this.dragDirection);
                 }
             }
+        }
+
+        if (this._net && cmd.changes.length > 0) {
+            this._net.pushCommand(cmd);
         }
     }
 
@@ -4570,4 +4633,8 @@ class HexMapEditor {
     newLargeMap(): void {
         this.grid.createMap(80, 60);
     }
+}
+
+export class HexGUI {
+    // p
 }
