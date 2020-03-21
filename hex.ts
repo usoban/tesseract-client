@@ -3,6 +3,7 @@
 ///<reference path="babylonjs.materials.module.d.ts" />
 
 import { Game } from "./game";
+import { Commands } from "./commands.js";
 
 type Nullable<T> = T | null;
 
@@ -529,7 +530,7 @@ enum HexEdgeType {
     Flat, Slope, Cliff
 }
 
-class HexCoordinates {
+export class HexCoordinates {
     public x: number;
     public z: number;
     private _y: number;
@@ -4408,16 +4409,16 @@ export class HexMapEditor {
         if (!cell) {
             return;
         }
-
-        let cmd = {name: 'hex_cell.change', changes: [], hex_cell_coordinates: cell.coordinates};
+        
+        let changes = [];
 
         if (this.activeTerrainTypeIndex >= 0) {
-            cmd.changes.push({property: 'terrain_type_index', prev_value: cell.terrainTypeIndex, new_value: this.activeTerrainTypeIndex});
+            changes.push({property: 'terrain_type_index', prev_value: cell.terrainTypeIndex, new_value: this.activeTerrainTypeIndex});
             cell.terrainTypeIndex = this.activeTerrainTypeIndex;
         }
 
         if (this.isElevationSelected) {
-            cmd.changes.push({property: 'elevation', prev_value: cell.elevation, new_value: this.activeElevation});
+            changes.push({property: 'elevation', prev_value: cell.elevation, new_value: this.activeElevation});
             cell.elevation = this.activeElevation;
         }
 
@@ -4466,8 +4467,8 @@ export class HexMapEditor {
             }
         }
 
-        if (this._net && cmd.changes.length > 0) {
-            this._net.pushCommand(cmd);
+        if (this._net && changes.length > 0) {
+            this._net.pushCommand(new Commands.HexCell.Change(cell.coordinates, changes));
         }
     }
 
@@ -4636,5 +4637,71 @@ export class HexMapEditor {
 }
 
 export class HexGUI {
-    // p
+    private _nextTurnBtn: HTMLButtonElement;
+    private _turnCounter: HTMLSpanElement;
+    private _net: Game.Net;
+    private _gameState: Game.State;
+
+    constructor(gameState: Game.State, net: Game.Net) {
+        this._gameState = gameState;
+        this._net = net;
+
+        this.init();
+    }
+
+    private init(): void {
+        this.initNextTurnButton();
+        this.initTurnCounter();
+
+        this._gameState.registerObserver('HexGUI', this.onGameStateChanged.bind(this));
+    }
+
+    private initNextTurnButton(): void {
+        this._nextTurnBtn = document.querySelector('.turn-btn button');
+
+        this._nextTurnBtn.onclick = () => {
+            if (this._gameState.isGameReady) {
+                this._net.pushCommand(new Commands.Player.FinishTurnCmd(this._gameState.turnNumber));
+            } else {
+                this._net.pushCommand(new Commands.Player.ReadyCmd(), () => {
+                    this._gameState.ready();
+                });
+            }
+        };
+
+        this.refreshTurnButton();
+    }
+
+    private initTurnCounter(): void {
+        this._turnCounter = document.querySelector('.turn-counter-value');
+        this.refreshTurnCounter();
+    }
+
+    private onGameStateChanged(): void {
+        this.refreshTurnButton();
+        this.refreshTurnCounter();
+    }
+
+    private refreshTurnButton(): void {
+        if (!this._gameState.isGameJoined) {
+            this._nextTurnBtn.className = 'connecting';
+            this._nextTurnBtn.disabled = true;
+        }
+        else if (!this._gameState.isGameReady) {
+            this._nextTurnBtn.className = 'join';
+            this._nextTurnBtn.disabled = false;
+        } 
+        else if (this._gameState.turnActive) {
+            this._nextTurnBtn.className = 'play';
+            this._nextTurnBtn.disabled = false;
+        }
+        else {
+            this._nextTurnBtn.className = 'waiting';
+            this._nextTurnBtn.disabled = true;
+        }
+    }
+
+    private refreshTurnCounter(): void {
+        this._turnCounter.innerText = this._gameState.turnNumber.toString();
+    }
 }

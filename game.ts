@@ -1,6 +1,7 @@
 import { HexGridFreeCameraMouseInput } from "./hex_camera.js"
-import { HexGrid, HexMapEditor } from "./hex.js"
+import { HexGrid, HexMapEditor, HexGUI } from "./hex.js"
 import { Socket, Channel } from "./phoenix.js";
+import { Commands } from "./commands.js"
 
 export namespace Game {
     export class Client {
@@ -13,6 +14,8 @@ export namespace Game {
         private _hexGrid: HexGrid;
         private _hexMapEditor: HexMapEditor;
         private _net: Game.Net;
+        private _state: Game.State;
+        private _gui: HexGUI;
 
         constructor(canvasElement : string) {
             // Create canvas and engine.
@@ -21,6 +24,7 @@ export namespace Game {
         }
 
         createScene() : void {
+            this._state = new Game.State();
             // Create a basic BJS Scene object.
             this._scene = new BABYLON.Scene(this._engine);
             // this._scene.clearColor = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
@@ -55,6 +59,8 @@ export namespace Game {
                 }
             }
 
+            this._gui = new HexGUI(this._state, this._net);
+
             this._hexMapEditor = new HexMapEditor(this._hexGrid, this._net);
             this._hexMapEditor.attachCameraControl(this._camera);
 
@@ -87,7 +93,7 @@ export namespace Game {
         }
 
         connect(gameId: string, playerId: string): void {
-            this._net = new Game.Net(gameId, playerId);
+            this._net = new Game.Net(gameId, playerId, this._state);
             this._net.connect();
         }
 
@@ -107,19 +113,78 @@ export namespace Game {
         }
     }
 
+    export class State {
+        private _isGameJoined: boolean = false;
+        private _isGameReady: boolean = false;
+        private _isTurnActive: boolean = false;
+        private _turnNumber: number = -1;
+        private _observers = {};
+
+        get isGameJoined(): boolean {
+            return this._isGameJoined;
+        }
+
+        get isGameReady(): boolean {
+            return this.isGameJoined && this._isGameReady;
+        }
+
+        public joined(): void {
+            this._isGameJoined = true;
+            this.notifyObservers();
+        }
+
+        public ready(): void {
+            this._isGameReady = true;
+            this.notifyObservers();
+        }
+
+        get turnNumber(): number {
+            return this._turnNumber;
+        }
+        
+        get turnActive(): boolean {
+            return this._isTurnActive;
+        }
+
+        set turn(turn: number) {
+            this._turnNumber = turn;
+            this.notifyObservers();
+        }
+
+        set turnActive(active: boolean) {
+            this._isTurnActive = active;
+            this.notifyObservers();
+        }
+
+        registerObserver(observer: string, callback: Function): void {
+            this._observers[observer] = callback;
+        }
+
+        unregisterObserver(observer: string): void {
+            delete this._observers[observer];
+        }
+
+        private notifyObservers(): void {
+            Object.keys(this._observers).forEach(k => this._observers[k](this));
+        }
+    }
+
     export class Net {
         private _gameId: string;
         private _playerId: string;
+        private _gameState: Game.State;
         private _socket: Socket;
         private _gameChannel: Channel;
+        private _playerChannel: Channel;
 
-        constructor(gameId: string, playerId: string) {
+        constructor(gameId: string, playerId: string, gameState: Game.State) {
             this._gameId = gameId;
             this._playerId = playerId;
+            this._gameState = gameState;
         }
 
         connect(): void {
-            this._socket = new Socket("ws://localhost:4000/socket", {params: {player_id: this._playerId}});
+            this._socket = new Socket('ws://localhost:4000/socket', {params: {player_id: this._playerId}});
             (<any>this._socket).connect(); // the first arg. is deprecated, but this shit still wants something, so we casted it to any ;)
         }
 
@@ -130,50 +195,76 @@ export namespace Game {
                 });
             };
 
-            const ready = () => {
-                this._gameChannel.push("ready", {}, 5000)
-                    .receive("ok", loadGrid)
-                    .receive("error", (reason) => console.log(reason))
-                    .receive("timeout", () => console.log("timed out :("));
+            const joinGame = () => {
+                this._gameChannel.push('join', {}, 5000)
+                    .receive('ok', (msg) => {
+                        console.log('Successfully joined.');
+                        loadGrid(msg);
+                        this._gameState.joined();
+                    })
+                    .receive('error', (reason) => console.log(reason))
+                    .receive('timeout', () => console.log('timed out :('));
             };
 
-            this._gameChannel = this._socket.channel("game:" + this._gameId);
+            let joinedGameChn = false, joinedPlayerChn = false;
+            const joinSuccess = (channel: string) => {
+                if (channel === 'game') {
+                    joinedGameChn = true;
+                } else {
+                    joinedPlayerChn = true;
+                }
 
-            // this._gameChannel.on("")
+                console.log('joined ' + channel + ' channel');
+
+                if (joinedGameChn && joinedPlayerChn) {
+                    joinGame();
+                }
+            };
+
+            this._gameChannel = this._socket.channel('game:' + this._gameId);
+            this._playerChannel = this._socket.channel('player:' + this._playerId, {"game_ref": this._gameId});
 
             this._gameChannel
                 .join()
-                .receive("ok", ({messages}) => {
-                    console.log("catching up", messages);
-                    ready();
-                })
-                .receive("error", ({reason}) => console.log("failed join", reason))
-                .receive("timeout", () => console.log("Network failure, still waiting..."));
+                .receive('ok', () => { joinSuccess('game'); })
+                .receive('error', ({reason}) => console.log('failed join', reason))
+                .receive('timeout', () => console.log('Network failure, still waiting...'));
+
+            this._playerChannel
+                .join()
+                .receive('ok', () => { joinSuccess('player'); })
+                .receive('error', ({reason}) => console.log('failed join', reason))
+                .receive('timeout', () => console.log('Network failure, still waiting...'));
+
+            this._playerChannel.on('event', this.processEvent.bind(this));
         }
 
-        // pushCommands(commands: Cmd[]): void {
+        pushCommand(cmd: Commands.Cmd, successCallback = null): void {
+            successCallback = successCallback || console.log;
 
-        // }
+            this._gameChannel.push('command', cmd)
+                .receive('ok', successCallback)
+                .receive('error', (reason) => console.log(reason))
+                .receive('timeout', () => console.log('Timed out :('));
+        }
 
-        // pushCommands(commands: any[]): void {
-        //     this._gameChannel.push("commands", commands)
-        //         .receive("ok", (msg) => console.log(msg))
-        //         .receive("error", (reason) => console.log(reason))
-        //         .receive("timeout", () => console.log("Timed out :("));
-        // }
+        processEvent(event: any): void {
+            console.log('Received event message', event);
 
-        pushCommand(cmd: any): void {
-            this._gameChannel.push("command", cmd)
-                .receive("ok", (msg) => console.log(msg))
-                .receive("error", (reason) => console.log(reason))
-                .receive("timeout", () => console.log("Timed out :("));
+            switch (event.name) {
+                case 'game.round_started':
+                    this._gameState.turn = event.turn_number;
+                    break;
+
+                case 'game.player_turn_activated':
+                    this._gameState.turnActive = event.player_ref === this._playerId;
+ 
+                    break;
+
+                default:
+                    console.log("Not handling event " + event.name);
+            }
+
         }
     }
-
-    export interface Cmd {
-        name: string;
-        prev_value: any;
-        new_value: any;
-    }
-
 }
