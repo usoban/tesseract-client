@@ -4164,14 +4164,16 @@ declare module BABYLON {
     /**
      * @hidden
      */
-    export class Tmp {
-        static Color3: Color3[];
-        static Color4: Color4[];
+    export class TmpVectors {
         static Vector2: Vector2[];
         static Vector3: Vector3[];
         static Vector4: Vector4[];
         static Quaternion: Quaternion[];
         static Matrix: Matrix[];
+    }
+    export class TmpColors {
+        static Color3: Color3[];
+        static Color4: Color4[];        
     }
 }
 declare module BABYLON {

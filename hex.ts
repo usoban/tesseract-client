@@ -544,6 +544,14 @@ export class HexCoordinates {
         return -this.x - this.z;
     }
 
+    public distanceTo(other: HexCoordinates): number {
+        return (
+            Math.abs(this.x - other.x) +
+            Math.abs(this.y - other.y) +
+            Math.abs(this.z - other.z)
+        ) / 2;
+    }
+
     public static fromOffsetCoordinates(x: number, z: number): HexCoordinates {
         return new HexCoordinates(x - Math.floor(z/2.0), z);
     }
@@ -1422,13 +1430,13 @@ class XQuaternion {
             // v1 = destination.clone(),
             d: number;
         
-        BABYLON.Tmp.Vector3[0] = vector.clone();
-        BABYLON.Tmp.Vector3[1] = destination.clone();
+        BABYLON.TmpVectors.Vector3[0] = vector.clone();
+        BABYLON.TmpVectors.Vector3[1] = destination.clone();
 
-        BABYLON.Tmp.Vector3[0].normalize();
-        BABYLON.Tmp.Vector3[1].normalize();
+        BABYLON.TmpVectors.Vector3[0].normalize();
+        BABYLON.TmpVectors.Vector3[1].normalize();
 
-        d = BABYLON.Vector3.Dot(BABYLON.Tmp.Vector3[0], BABYLON.Tmp.Vector3[1]);
+        d = BABYLON.Vector3.Dot(BABYLON.TmpVectors.Vector3[0], BABYLON.TmpVectors.Vector3[1]);
         
         if (d >= 1.0) {
             return BABYLON.Quaternion.Identity();
@@ -1453,7 +1461,7 @@ class XQuaternion {
             let
                 s = Math.sqrt((1 + d) * 2),
                 invs = 1/s,
-                c = BABYLON.Vector3.Cross(BABYLON.Tmp.Vector3[0], BABYLON.Tmp.Vector3[1]);
+                c = BABYLON.Vector3.Cross(BABYLON.TmpVectors.Vector3[0], BABYLON.TmpVectors.Vector3[1]);
 
             q.x = c.x * invs;
             q.y = c.y * invs;
@@ -1518,6 +1526,8 @@ class HexCell extends BABYLON.Mesh {
     private _plantLevel: number = 0;
     private _walled: boolean = false;
     private _specialIndex: number = 0;
+    private _distance: number = Number.MAX_VALUE;
+    private _showUI: boolean = true;
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -1858,10 +1868,40 @@ class HexCell extends BABYLON.Mesh {
         return this.hasIncomingRiver ? this.incomingRiver : this.outgoingRiver;
     }
 
+    set showUI(show: boolean) {
+        this._showUI = show;
+        this.isVisible = show;
+        
+        if (show) {
+            this.updateDistanceLabel();
+        }
+    }
+
+    get distance(): number {
+        return this._distance;
+    }
+
+    set distance(distance: number) {
+        this._distance = distance;
+        this.updateDistanceLabel();
+    }
+
+    public updateDistanceLabel(): void {
+        let str = this.distance === Number.MAX_VALUE ? "" : this.distance.toString();
+        let txt: any = (<BABYLON.StandardMaterial>this.material).diffuseTexture,
+        ctx = txt.getContext();
+
+        ctx.clearRect(0, 0, 64, 64);
+        txt.drawText(str, null, null, "32px bold monospace", "black", "transparent", true);
+    }
+
     // Sets mesh render position from cellPosition (renders it slightly above).
     private refreshMeshPosition(): void {
         this.position = this._cellPosition.clone();
-        //this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+
+        if (this._showUI) {
+            this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+        }
     }
 
     private refreshPosition(): void {
@@ -3948,12 +3988,12 @@ export class HexGrid {
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
 
-        // let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene),
-        //     textTexture = this.makeCellText(cell.coordinates.toString());
-        // material.diffuseTexture = textTexture;
-        // material.opacityTexture = textTexture;
-        // material.specularColor = BABYLON.Color3.Black();
-        // cell.material = material;
+        let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene),
+            textTexture = this.makeCellText(cell.coordinates.x.toString());
+        material.diffuseTexture = textTexture;
+        material.opacityTexture = textTexture;
+        material.specularColor = BABYLON.Color3.Black();
+        cell.material = material;
 
         cell.elevation = 0;
 
@@ -3976,25 +4016,25 @@ export class HexGrid {
 
         this.addCellToChunk(x, z, cell);
 
-        cell.isVisible = false;
-
         return cell;
     }
 
     private makeCellText(txt: string): BABYLON.DynamicTexture {
-        let size = 64;
-        let DTw = 10*60;
-        let DTh = 10*60;
+        // let size = 16;
+        let DTw = 64;
+        let DTh = 64;
         let textTexture = new BABYLON.DynamicTexture("DT", {width: DTw, height: DTh}, this._scene, false);
-        textTexture.hasAlpha = true;
-        let textCtx = textTexture.getContext();
-        textCtx.font = `${size}px bold monospace`;
-        textCtx.fillStyle = "transparent";
-        let textWidth = textCtx.measureText(txt).width;
-        let ratio = textWidth/size;
-        let fontSize = Math.floor(DTw / ratio);
-    
-        textTexture.drawText(txt, null, null, `${fontSize}px bold monospace`, "black", null);
+        // textTexture.hasAlpha = true;
+        // let textCtx = textTexture.getContext();
+        // textCtx.font = `${size}px bold monospace`;
+        // textCtx.fillStyle = "transparent";
+        // let textWidth = textCtx.measureText(txt).width;
+        // let ratio = textWidth/size;
+        // let fontSize = Math.floor(DTw / ratio);
+        // console.log("fontSize: ", fontSize);
+        // textTexture.drawText(txt, null, null, `${fontSize}px bold monospace`, "black", null);
+
+        textTexture.drawText(txt, null, null, `32px bold monospace`, "black", "transparent", true, true);
 
         return textTexture;
     }
@@ -4010,6 +4050,11 @@ export class HexGrid {
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
 
+    public findDistancesTo(cell: HexCell): void {
+        Coroutines.stopAll();
+        Coroutines.start('search', this.search(cell))
+    }
+
     public save(writer: ByteBuffer): void {
         writer.writeInt32(this.cellCountX);
         writer.writeInt32(this.cellCountZ);
@@ -4018,6 +4063,8 @@ export class HexGrid {
     }
 
     public load(reader: ByteBuffer): void {
+        Coroutines.stopAll();
+
         let 
             cellCountX = reader.readInt32(),
             cellCountZ = reader.readInt32();
@@ -4033,7 +4080,8 @@ export class HexGrid {
     }
 
     public loadFromObject(grid: any): void {
-        console.log(grid)
+        Coroutines.stopAll();
+
         let 
             cellCountX = grid.cell_count_x,
             cellCountZ = grid.cell_count_z;
@@ -4048,6 +4096,67 @@ export class HexGrid {
 
         this.cells.forEach((cell: HexCell) => cell.loadFromObject(cells.shift()));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
+    }
+
+    showUI(show: boolean): void {
+        this.cells.forEach((c: HexCell) => {
+            c.showUI = show;
+        });
+    }
+
+    search(cell: HexCell): any {
+        const self = this;
+
+        this.cells.forEach(c => c.distance = Number.MAX_VALUE);
+
+        let frontier: HexCell[] = [];
+        cell.distance = 0;
+        frontier.push(cell);
+
+        return (function* () {
+            while (frontier.length > 0) {
+                yield 1000.0/60.0;
+                let current = frontier.shift();
+                for (let d: HexDirection = HexDirection.NE; d <= HexDirection.NW; d++) {
+                    let neighbor = current.getNeighbor(d);
+                    if (!neighbor) {
+                        continue;
+                    }
+                    if (neighbor.isUnderwater) {
+                        continue;
+                    }
+
+                    let edgeType = current.getEdgeTypeForCell(neighbor);
+                    if (edgeType === HexEdgeType.Cliff) {
+                        continue;
+                    }
+
+                    let distance = current.distance;
+                    if (current.hasRoadThroughEdge(d)) {
+                        distance += 1;
+                    }
+                    else if (current.walled != neighbor.walled) {
+                        continue;
+                    } 
+                    else {
+                        distance += edgeType == HexEdgeType.Flat ? 5 : 10;
+                        distance += neighbor.urbanLevel + neighbor.farmLevel + neighbor.plantLevel;
+                    }
+
+                    if (neighbor.distance === Number.MAX_VALUE) {
+                        neighbor.distance = distance;
+                        frontier.push(neighbor);
+                    } 
+                    else if (distance < neighbor.distance) {
+                        neighbor.distance = distance;
+                    }
+
+                    frontier.sort((a: HexCell, b: HexCell) => a.distance - b.distance);
+                }
+            }
+
+            return;
+        });
     }
 }
 
@@ -4104,6 +4213,23 @@ class HexMapEditorTool {
         this._panel.style.transform = 'translateX(0px)';
     }
 
+    addPanelInput(id: string, label: string): HTMLInputElement {
+        let
+            groupEl = document.createElement('div'),
+            labelEl = document.createElement('label'),
+            inputEl = document.createElement('input');
+
+        labelEl.innerText = label;
+        inputEl.id = id; 
+
+        groupEl.appendChild(labelEl);
+        groupEl.appendChild(inputEl);
+
+        this._container.appendChild(groupEl);
+
+        return inputEl;
+    }
+
     addPanelCheckbox(label: string, callbackFn): void {
         let
             group = document.createElement('div'),
@@ -4149,6 +4275,42 @@ class HexMapEditorTool {
 
         group.appendChild(groupLabel);
         group.appendChild(select);
+
+        this._container.appendChild(group);
+        this._container.appendChild(document.createElement('hr'));
+    }
+
+    addPanelSlider(
+        label: string, 
+        minVal: number, 
+        maxVal: number, 
+        defaultVal: number, 
+        valueChangeCallbackFn: (a: any) => void
+    ) {
+        let
+            group = document.createElement('div'),
+            groupLabel = document.createElement('label'),
+            slider = document.createElement('input'),
+            formatLabel = (v) => { return `${label} (${v})<br>`; };
+
+        groupLabel.innerHTML = formatLabel(defaultVal);
+        
+        slider.type = 'range';
+        slider.min = `${minVal}`;
+        slider.max = `${maxVal}`;
+        slider.value = `${defaultVal}`;
+        slider.onchange = (event: any) => {
+            let v = event.srcElement.value;
+            groupLabel.innerHTML = formatLabel(v);
+            valueChangeCallbackFn(parseInt(v));
+        };
+        slider.oninput = (event: any) => {
+            let v = event.srcElement.value;
+            groupLabel.innerHTML = formatLabel(v);
+        };
+
+        group.appendChild(groupLabel);
+        group.appendChild(slider);
 
         this._container.appendChild(group);
         this._container.appendChild(document.createElement('hr'));
@@ -4235,6 +4397,8 @@ export class HexMapEditor {
     private _editTool: HexMapEditorTool;
     private _editMode: boolean = false;
 
+    private _nBots = 1;
+
     constructor(grid: HexGrid, net: Game.Net) {
         this.grid = grid;
         this._net = net;
@@ -4311,6 +4475,7 @@ export class HexMapEditor {
 
         let 
             newMapButtonGroup = document.createElement('div'),
+            networkConnectGroup = document.createElement('div'),
             newSmallMapBtn = document.createElement('button'),
             newMediumMapBtn = document.createElement('button'),
             newLargeMapBtn = document.createElement('button');
@@ -4330,6 +4495,25 @@ export class HexMapEditor {
         newMapButtonGroup.appendChild(document.createElement('br'));
 
         creatorPanel.container.appendChild(newMapButtonGroup);
+        creatorPanel.container.appendChild(document.createElement('hr'));
+
+        // Network tools.
+        let
+            serverAddressInput = creatorPanel.addPanelInput('server-address', 'Server Address'),
+            gameRefInput = creatorPanel.addPanelInput('game-ref', 'Game reference'),
+            playerRefInput = creatorPanel.addPanelInput('player-ref', 'Player reference'),
+            _nBotsInput = creatorPanel.addPanelSlider('N Bots', 1, 5, 1, (newValue) => {
+                this._nBots = newValue;
+            }),
+            connectBtn = document.createElement('button');
+        
+        serverAddressInput.value = 'ws://localhost:4000/socket'
+        gameRefInput.value = 'foo';
+        playerRefInput.value = 'bar';
+        connectBtn.innerText = 'Connect';
+        connectBtn.onclick = this.connectToServer.bind(this);
+
+        creatorPanel.container.appendChild(connectBtn);
     }
 
 
@@ -4360,6 +4544,8 @@ export class HexMapEditor {
 
             if (this._editMode) {
                 this.editCells(currentCell);
+            } else {
+                this.grid.findDistancesTo(currentCell);
             }
 
             this.previousCell = currentCell;
@@ -4575,6 +4761,7 @@ export class HexMapEditor {
 
     toggleEdit(state: boolean): void {
         this._editMode = state;
+        this.grid.showUI(!state);
     }
 
     public save(): void {
@@ -4634,13 +4821,30 @@ export class HexMapEditor {
     newLargeMap(): void {
         this.grid.createMap(80, 60);
     }
+
+    connectToServer(): void {
+        let 
+            serverAddrInput: HTMLInputElement = document.querySelector('#server-address'),
+            gameReferenceInput: HTMLInputElement = document.querySelector('#game-ref'),
+            playerReferenceInput: HTMLInputElement = document.querySelector('#player-ref');
+
+        if (!serverAddrInput.value || !gameReferenceInput.value || !playerReferenceInput.value) {
+            console.error('Insufficient data to connect to server.');
+        }
+
+        this._net.serverAddress = serverAddrInput.value;
+        this._net.connect(gameReferenceInput.value, playerReferenceInput.value);
+        this._net.join(this.grid, {n_bots: this._nBots});
+    }
 }
 
 export class HexGUI {
-    private _nextTurnBtn: HTMLButtonElement;
-    private _turnCounter: HTMLSpanElement;
     private _net: Game.Net;
     private _gameState: Game.State;
+
+    private _nextTurnBtn: HTMLButtonElement;
+    private _turnCounter: HTMLSpanElement;
+    private _turnPlayerLabel: HTMLSpanElement;
 
     constructor(gameState: Game.State, net: Game.Net) {
         this._gameState = gameState;
@@ -4652,6 +4856,7 @@ export class HexGUI {
     private init(): void {
         this.initNextTurnButton();
         this.initTurnCounter();
+        this.initTurnPlayerLabel();
 
         this._gameState.registerObserver('HexGUI', this.onGameStateChanged.bind(this));
     }
@@ -4677,9 +4882,15 @@ export class HexGUI {
         this.refreshTurnCounter();
     }
 
+    private initTurnPlayerLabel(): void {
+        this._turnPlayerLabel = document.querySelector('.turn-player-label');
+        this.refreshTurnPlayerLabel();
+    }
+
     private onGameStateChanged(): void {
         this.refreshTurnButton();
         this.refreshTurnCounter();
+        this.refreshTurnPlayerLabel();
     }
 
     private refreshTurnButton(): void {
@@ -4703,5 +4914,40 @@ export class HexGUI {
 
     private refreshTurnCounter(): void {
         this._turnCounter.innerText = this._gameState.turnNumber.toString();
+    }
+
+    private refreshTurnPlayerLabel(): void {
+        this._turnPlayerLabel.innerText = this._gameState.activePlayer || '/';
+    }
+}
+
+class Coroutines {
+    private static HANDLES: Map<String, Generator> = new Map();
+    private static TIMERS: Map<String, any> = new Map();
+
+    public static stopAll(): void {
+        Coroutines.HANDLES.forEach((g: Generator, _) => g.return());
+        Coroutines.TIMERS.forEach((t: any, _) => clearTimeout(t));
+        Coroutines.HANDLES = new Map();
+        Coroutines.TIMERS = new Map();
+    }
+
+    public static start(id: string, generator): void {
+        Coroutines.HANDLES[id] = generator();
+        this.run(id);
+    }
+
+    private static run(id: string): void {
+        let result = Coroutines.HANDLES[id].next();
+
+        if (!result.done) {
+            let sleep = result.value;
+
+            if (sleep !== null) {
+                Coroutines.TIMERS[id] = setTimeout(() => Coroutines.run(id), sleep);
+            } else {
+                Coroutines.run(id);
+            }
+        }
     }
 }

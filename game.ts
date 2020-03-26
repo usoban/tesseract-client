@@ -25,6 +25,7 @@ export namespace Game {
 
         createScene() : void {
             this._state = new Game.State();
+            this._net = new Game.Net(this._state);
             // Create a basic BJS Scene object.
             this._scene = new BABYLON.Scene(this._engine);
             // this._scene.clearColor = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
@@ -51,13 +52,6 @@ export namespace Game {
             // this._light = new BABYLON.DirectionalLight('directional_light', new BABYLON.Vector3(0, -1 ,0), this._scene);
 
             this._hexGrid = new HexGrid(this._scene);
-
-            if (window.location.search) {
-                const params = this.parseQueryString(window.location.search);
-                if ('game_id' in params && 'player_id' in params) {
-                    this.connect(params['game_id'], params['player_id']);
-                }
-            }
 
             this._gui = new HexGUI(this._state, this._net);
 
@@ -86,39 +80,52 @@ export namespace Game {
             this._scene.registerAfterRender(() => {
                 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;
             });
-
-            if (this._net) {
-                this._net.join(this._hexGrid);
-            }
         }
+        
 
-        connect(gameId: string, playerId: string): void {
-            this._net = new Game.Net(gameId, playerId, this._state);
-            this._net.connect();
-        }
+        // parseQueryString(query: string): Object {
+        //     const reducer = (dict: Object, [k, v]): Object => {
+        //         dict[k] = v;
+        //         return dict;
+        //     };
 
-        parseQueryString(query: string): Object {
-            const reducer = (dict: Object, [k, v]): Object => {
-                dict[k] = v;
-                return dict;
-            };
-
-            return (
-                query
-                .substr(1)
-                .split("&")
-                .map(kv => kv.split("="))
-                .reduce(reducer, {})
-            );
-        }
+        //     return (
+        //         query
+        //         .substr(1)
+        //         .split("&")
+        //         .map(kv => kv.split("="))
+        //         .reduce(reducer, {})
+        //     );
+        // }
     }
 
     export class State {
+        private _gameRef: string = null;
+        private _playerRef: string = null;
         private _isGameJoined: boolean = false;
         private _isGameReady: boolean = false;
         private _isTurnActive: boolean = false;
+        private _activePlayer: string;
         private _turnNumber: number = -1;
         private _observers = {};
+
+        set game(gameRef: string) {
+            if (this._gameRef !== null) {
+                throw new Error("Cannot change state\'s gameRef as it is already set.")
+            }
+
+            this._gameRef = gameRef;
+            this.notifyObservers();
+        }
+
+        set player(playerRef: string) {
+            if (this._playerRef !== null) {
+                throw new Error("Cannot change state\'s playerRef as it is already set.")
+            }
+
+            this._playerRef = playerRef;
+            this.notifyObservers();
+        }
 
         get isGameJoined(): boolean {
             return this._isGameJoined;
@@ -146,13 +153,18 @@ export namespace Game {
             return this._isTurnActive;
         }
 
-        set turn(turn: number) {
-            this._turnNumber = turn;
+        set activePlayer(playerRef: string) {
+            this._activePlayer = playerRef;
+            this._isTurnActive = playerRef === this._playerRef;
             this.notifyObservers();
         }
 
-        set turnActive(active: boolean) {
-            this._isTurnActive = active;
+        get activePlayer(): string {
+            return this._activePlayer;
+        }
+
+        set turn(turn: number) {
+            this._turnNumber = turn;
             this.notifyObservers();
         }
 
@@ -170,6 +182,8 @@ export namespace Game {
     }
 
     export class Net {
+        private _serverAddress = 'ws://localhost:4000/socket';
+
         private _gameId: string;
         private _playerId: string;
         private _gameState: Game.State;
@@ -177,18 +191,25 @@ export namespace Game {
         private _gameChannel: Channel;
         private _playerChannel: Channel;
 
-        constructor(gameId: string, playerId: string, gameState: Game.State) {
-            this._gameId = gameId;
-            this._playerId = playerId;
+        constructor(gameState: Game.State) {
             this._gameState = gameState;
         }
 
-        connect(): void {
+        set serverAddress(serverAddr: string) {
+            this._serverAddress = serverAddr;
+        }
+
+        connect(gameRef: string, playerRef: string): void {
+            this._gameId = gameRef;
+            this._playerId = playerRef;
+            this._gameState.game = gameRef;
+            this._gameState.player = playerRef;
+
             this._socket = new Socket('ws://localhost:4000/socket', {params: {player_id: this._playerId}});
             (<any>this._socket).connect(); // the first arg. is deprecated, but this shit still wants something, so we casted it to any ;)
         }
 
-        join(grid: HexGrid): void {
+        join(grid: HexGrid, gameParams: any): void {
             const loadGrid = (joinMsg) => {
                 grid.onLoaded(() => {
                     grid.loadFromObject(joinMsg.grid);
@@ -221,8 +242,8 @@ export namespace Game {
                 }
             };
 
-            this._gameChannel = this._socket.channel('game:' + this._gameId);
-            this._playerChannel = this._socket.channel('player:' + this._playerId, {"game_ref": this._gameId});
+            this._gameChannel = this._socket.channel('game:' + this._gameId, gameParams);
+            this._playerChannel = this._socket.channel('player:' + this._playerId, {game_ref: this._gameId});
 
             this._gameChannel
                 .join()
@@ -240,6 +261,11 @@ export namespace Game {
         }
 
         pushCommand(cmd: Commands.Cmd, successCallback = null): void {
+            if (!this._gameChannel) {
+                console.info('Attempting to push a command while not connected to a game.');
+                return;
+            }
+
             successCallback = successCallback || console.log;
 
             this._gameChannel.push('command', cmd)
@@ -257,12 +283,11 @@ export namespace Game {
                     break;
 
                 case 'game.player_turn_activated':
-                    this._gameState.turnActive = event.player_ref === this._playerId;
- 
+                    this._gameState.activePlayer = event.player_ref;
                     break;
 
                 default:
-                    console.log("Not handling event " + event.name);
+                    console.log('Not handling event ' + event.name);
             }
 
         }

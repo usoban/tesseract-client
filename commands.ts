@@ -9,11 +9,11 @@ export namespace Commands {
 
     export class Change implements Cmd {
       name: string = "hex_cell.change";
-      hexCellCoordinates: HexCoordinates;
+      hex_cell_coordinates: HexCoordinates;
       changes: any[];
 
       constructor(hexCellCoordinates: HexCoordinates, changes: any[]) {
-        this.hexCellCoordinates = hexCellCoordinates;
+        this.hex_cell_coordinates = hexCellCoordinates;
         this.changes = changes;
       }
     }

@@ -11,6 +11,7 @@ export var Game;
         }
         createScene() {
             this._state = new Game.State();
+            this._net = new Game.Net(this._state);
             // Create a basic BJS Scene object.
             this._scene = new BABYLON.Scene(this._engine);
             // this._scene.clearColor = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
@@ -29,12 +30,6 @@ export var Game;
             this._light = new BABYLON.HemisphericLight('light1', new BABYLON.Vector3(0, 1.0, 0), this._scene);
             // this._light = new BABYLON.DirectionalLight('directional_light', new BABYLON.Vector3(0, -1 ,0), this._scene);
             this._hexGrid = new HexGrid(this._scene);
-            if (window.location.search) {
-                const params = this.parseQueryString(window.location.search);
-                if ('game_id' in params && 'player_id' in params) {
-                    this.connect(params['game_id'], params['player_id']);
-                }
-            }
             this._gui = new HexGUI(this._state, this._net);
             this._hexMapEditor = new HexMapEditor(this._hexGrid, this._net);
             this._hexMapEditor.attachCameraControl(this._camera);
@@ -56,34 +51,32 @@ export var Game;
             this._scene.registerAfterRender(() => {
                 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;
             });
-            if (this._net) {
-                this._net.join(this._hexGrid);
-            }
-        }
-        connect(gameId, playerId) {
-            this._net = new Game.Net(gameId, playerId, this._state);
-            this._net.connect();
-        }
-        parseQueryString(query) {
-            const reducer = (dict, [k, v]) => {
-                dict[k] = v;
-                return dict;
-            };
-            return (query
-                .substr(1)
-                .split("&")
-                .map(kv => kv.split("="))
-                .reduce(reducer, {}));
         }
     }
     Game.Client = Client;
     class State {
         constructor() {
+            this._gameRef = null;
+            this._playerRef = null;
             this._isGameJoined = false;
             this._isGameReady = false;
             this._isTurnActive = false;
             this._turnNumber = -1;
             this._observers = {};
+        }
+        set game(gameRef) {
+            if (this._gameRef !== null) {
+                throw new Error("Cannot change state\'s gameRef as it is already set.");
+            }
+            this._gameRef = gameRef;
+            this.notifyObservers();
+        }
+        set player(playerRef) {
+            if (this._playerRef !== null) {
+                throw new Error("Cannot change state\'s playerRef as it is already set.");
+            }
+            this._playerRef = playerRef;
+            this.notifyObservers();
         }
         get isGameJoined() {
             return this._isGameJoined;
@@ -105,12 +98,16 @@ export var Game;
         get turnActive() {
             return this._isTurnActive;
         }
-        set turn(turn) {
-            this._turnNumber = turn;
+        set activePlayer(playerRef) {
+            this._activePlayer = playerRef;
+            this._isTurnActive = playerRef === this._playerRef;
             this.notifyObservers();
         }
-        set turnActive(active) {
-            this._isTurnActive = active;
+        get activePlayer() {
+            return this._activePlayer;
+        }
+        set turn(turn) {
+            this._turnNumber = turn;
             this.notifyObservers();
         }
         registerObserver(observer, callback) {
@@ -125,16 +122,22 @@ export var Game;
     }
     Game.State = State;
     class Net {
-        constructor(gameId, playerId, gameState) {
-            this._gameId = gameId;
-            this._playerId = playerId;
+        constructor(gameState) {
+            this._serverAddress = 'ws://localhost:4000/socket';
             this._gameState = gameState;
         }
-        connect() {
+        set serverAddress(serverAddr) {
+            this._serverAddress = serverAddr;
+        }
+        connect(gameRef, playerRef) {
+            this._gameId = gameRef;
+            this._playerId = playerRef;
+            this._gameState.game = gameRef;
+            this._gameState.player = playerRef;
             this._socket = new Socket('ws://localhost:4000/socket', { params: { player_id: this._playerId } });
             this._socket.connect(); // the first arg. is deprecated, but this shit still wants something, so we casted it to any ;)
         }
-        join(grid) {
+        join(grid, gameParams) {
             const loadGrid = (joinMsg) => {
                 grid.onLoaded(() => {
                     grid.loadFromObject(joinMsg.grid);
@@ -163,8 +166,8 @@ export var Game;
                     joinGame();
                 }
             };
-            this._gameChannel = this._socket.channel('game:' + this._gameId);
-            this._playerChannel = this._socket.channel('player:' + this._playerId, { "game_ref": this._gameId });
+            this._gameChannel = this._socket.channel('game:' + this._gameId, gameParams);
+            this._playerChannel = this._socket.channel('player:' + this._playerId, { game_ref: this._gameId });
             this._gameChannel
                 .join()
                 .receive('ok', () => { joinSuccess('game'); })
@@ -178,6 +181,10 @@ export var Game;
             this._playerChannel.on('event', this.processEvent.bind(this));
         }
         pushCommand(cmd, successCallback = null) {
+            if (!this._gameChannel) {
+                console.info('Attempting to push a command while not connected to a game.');
+                return;
+            }
             successCallback = successCallback || console.log;
             this._gameChannel.push('command', cmd)
                 .receive('ok', successCallback)
@@ -191,10 +198,10 @@ export var Game;
                     this._gameState.turn = event.turn_number;
                     break;
                 case 'game.player_turn_activated':
-                    this._gameState.turnActive = event.player_ref === this._playerId;
+                    this._gameState.activePlayer = event.player_ref;
                     break;
                 default:
-                    console.log("Not handling event " + event.name);
+                    console.log('Not handling event ' + event.name);
             }
         }
     }

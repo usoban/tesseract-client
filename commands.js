@@ -5,7 +5,7 @@ export var Commands;
         class Change {
             constructor(hexCellCoordinates, changes) {
                 this.name = "hex_cell.change";
-                this.hexCellCoordinates = hexCellCoordinates;
+                this.hex_cell_coordinates = hexCellCoordinates;
                 this.changes = changes;
             }
         }
