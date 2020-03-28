@@ -465,13 +465,15 @@ class Prefabs {
         Prefabs._mudTexture = makeTexture('./assets/gfx/material/mud.png');
         Prefabs._grassTexture = makeTexture('./assets/gfx/material/grass.png');
         Prefabs._gridTexture = makeTexture('./assets/gfx/material/grid.png');
+        Prefabs._cellOutlineTexture = makeTexture('./assets/gfx/material/cell-outline.png');
         return Promise.all([
             makePromise(Prefabs._gridTexture),
             makePromise(Prefabs._sandTexture),
             makePromise(Prefabs._stoneTexture),
             makePromise(Prefabs._snowTexture),
             makePromise(Prefabs._mudTexture),
-            makePromise(Prefabs._grassTexture)
+            makePromise(Prefabs._grassTexture),
+            makePromise(Prefabs._cellOutlineTexture)
         ]);
     }
     static toggleTerrainGrid() {
@@ -853,6 +855,25 @@ class Prefabs {
         }
         return Prefabs._bridgeMaterial;
     }
+    static cellOutlineMaterials(scene) {
+        if (!Prefabs._cellOutlineMaterials) {
+            const make = (name, color) => {
+                let mat = new BABYLON.StandardMaterial(`cell_outline_material_${name}`, scene);
+                mat.diffuseTexture = Prefabs._cellOutlineTexture;
+                mat.diffuseTexture.hasAlpha = true;
+                mat.diffuseTexture.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+                mat.depthFunction = BABYLON.Engine.ALWAYS;
+                mat.emissiveColor = BABYLON.Color3.Black();
+                mat.diffuseColor = color;
+                return mat;
+            };
+            Prefabs._cellOutlineMaterials = new Map();
+            Prefabs._cellOutlineMaterials['white'] = make('red', BABYLON.Color3.White());
+            Prefabs._cellOutlineMaterials['red'] = make('red', BABYLON.Color3.Red());
+            Prefabs._cellOutlineMaterials['blue'] = make('blue', BABYLON.Color3.Blue());
+        }
+        return Prefabs._cellOutlineMaterials;
+    }
     static terrain(name, scene) {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
@@ -1117,6 +1138,30 @@ class XMesh {
         currentAxis.y = 0;
         destination.y = 0;
         mesh.rotationQuaternion = XQuaternion.getRotationTo(currentAxis, destination);
+    }
+}
+class HexCellHightlight extends BABYLON.Mesh {
+    constructor(name, scene, parent, colorMaterials) {
+        super(name, scene, parent);
+        let options = {
+            size: 10,
+            width: 10,
+            height: 10,
+            updatable: true
+        };
+        let vertexData = BABYLON.VertexData.CreateGround(options);
+        vertexData.applyToMesh(this);
+        this._colorMaterials = colorMaterials;
+        this.material = colorMaterials['white'];
+        this.scaling.x = 1.7;
+        this.scaling.z = 1.7;
+        this.isVisible = false;
+    }
+    switch(color) {
+        if (!this._colorMaterials[color]) {
+            throw new Error('Invalid color material');
+        }
+        this.material = this._colorMaterials[color];
     }
 }
 /**
@@ -1407,6 +1452,15 @@ class HexCell extends BABYLON.Mesh {
         let txt = this.material.diffuseTexture, ctx = txt.getContext();
         ctx.clearRect(0, 0, 64, 64);
         txt.drawText(str, null, null, "32px bold monospace", "black", "transparent", true);
+    }
+    enableHighlight(color) {
+        this.highlightSprite.isVisible = true;
+        if (color !== null) {
+            this.highlightSprite.switch(color);
+        }
+    }
+    disableHighlight() {
+        this.highlightSprite.isVisible = false;
     }
     // Sets mesh render position from cellPosition (renders it slightly above).
     refreshMeshPosition() {
@@ -2758,11 +2812,15 @@ export class HexGrid {
         cell.isVisible = true;
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
-        let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene), textTexture = this.makeCellText(cell.coordinates.x.toString());
+        // Cell material (dynamic text texture for displaying e.g. position/distance/...)
+        let material = new BABYLON.StandardMaterial(`${x}_${z}-material`, this._scene), textTexture = this.makeCellText(cell.coordinates.x.toString());
         material.diffuseTexture = textTexture;
         material.opacityTexture = textTexture;
         material.specularColor = BABYLON.Color3.Black();
         cell.material = material;
+        // Cell hightlight sprite..TODO.
+        cell.highlightSprite = new HexCellHightlight(`hex_cell_highlight_${x}_${z}`, this._scene, cell, Prefabs.cellOutlineMaterials(this._scene));
+        // cell.highlightSprite.position = new BABYLON.Vector3 (0, 0, 0);
         cell.elevation = 0;
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i - 1]);
@@ -3040,6 +3098,7 @@ export class HexMapEditor {
         this.walledMode = OptionalToggle.Ignore;
         this.isPointerDown = false;
         this.isDrag = false;
+        this.isLeftShiftDown = false;
         this._editMode = false;
         this._nBots = 1;
         this.grid = grid;
@@ -3123,6 +3182,8 @@ export class HexMapEditor {
         this._scene.onPointerObservable.add(this.onPointerDown.bind(this), BABYLON.PointerEventTypes.POINTERDOWN);
         this._scene.onPointerObservable.add(this.onPointerUp.bind(this), BABYLON.PointerEventTypes.POINTERUP);
         this._scene.onPointerObservable.add(this.onPointerMove.bind(this), BABYLON.PointerEventTypes.POINTERMOVE);
+        this._scene.onKeyboardObservable.add(this.onKeyDown.bind(this), BABYLON.KeyboardEventTypes.KEYDOWN);
+        this._scene.onKeyboardObservable.add(this.onKeyUp.bind(this), BABYLON.KeyboardEventTypes.KEYUP);
     }
     handleInput() {
         if (HexMapEditor.POINTER_BLOCKED_BY_GUI) {
@@ -3140,6 +3201,13 @@ export class HexMapEditor {
             }
             if (this._editMode) {
                 this.editCells(currentCell);
+            }
+            else if (this.isLeftShiftDown) {
+                if (this._searchFromCell) {
+                    this._searchFromCell.disableHighlight();
+                }
+                this._searchFromCell = currentCell;
+                this._searchFromCell.enableHighlight('blue');
             }
             else {
                 this.grid.findDistancesTo(currentCell);
@@ -3168,6 +3236,12 @@ export class HexMapEditor {
             return;
         }
         this.handleInput();
+    }
+    onKeyDown(eventData, eventState) {
+        this.isLeftShiftDown = eventData.event.shiftKey;
+    }
+    onKeyUp(eventData, eventState) {
+        this.isLeftShiftDown = false;
     }
     validateDrag(currentCell) {
         for (let dragDirection = HexDirection.NE; dragDirection <= HexDirection.NW; dragDirection++) {

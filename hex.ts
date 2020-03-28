@@ -624,12 +624,14 @@ class Prefabs {
     private static _wallsMaterial: BABYLON.PBRMaterial;
     private static _towerMaterial: BABYLON.PBRMaterial;
     private static _bridgeMaterial: BABYLON.PBRMaterial;
+    private static _cellOutlineMaterials: Map<String, BABYLON.StandardMaterial>;
     private static _sandTexture: BABYLON.Texture;
     private static _stoneTexture: BABYLON.Texture;
     private static _snowTexture: BABYLON.Texture;
     private static _mudTexture: BABYLON.Texture;
     private static _grassTexture: BABYLON.Texture;
     private static _gridTexture: BABYLON.Texture;
+    private static _cellOutlineTexture: BABYLON.Texture;
 
     private static _foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
@@ -713,6 +715,7 @@ class Prefabs {
         Prefabs._mudTexture = makeTexture('./assets/gfx/material/mud.png');
         Prefabs._grassTexture = makeTexture('./assets/gfx/material/grass.png');
         Prefabs._gridTexture = makeTexture('./assets/gfx/material/grid.png');
+        Prefabs._cellOutlineTexture = makeTexture('./assets/gfx/material/cell-outline.png');
 
         return Promise.all([
             makePromise(Prefabs._gridTexture),
@@ -720,7 +723,8 @@ class Prefabs {
             makePromise(Prefabs._stoneTexture),
             makePromise(Prefabs._snowTexture),
             makePromise(Prefabs._mudTexture),
-            makePromise(Prefabs._grassTexture)
+            makePromise(Prefabs._grassTexture),
+            makePromise(Prefabs._cellOutlineTexture)
         ]);
     }
 
@@ -1197,6 +1201,29 @@ class Prefabs {
         return Prefabs._bridgeMaterial;
     }
 
+    public static cellOutlineMaterials(scene: BABYLON.Scene): Map<String, BABYLON.Material> {
+        if (!Prefabs._cellOutlineMaterials) {
+            const make = (name: string, color: BABYLON.Color3) => {
+                let mat = new BABYLON.StandardMaterial(`cell_outline_material_${name}`, scene);
+                mat.diffuseTexture = Prefabs._cellOutlineTexture;
+                mat.diffuseTexture.hasAlpha = true;
+                mat.diffuseTexture.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+                mat.depthFunction = BABYLON.Engine.ALWAYS;
+                mat.emissiveColor = BABYLON.Color3.Black();
+                mat.diffuseColor = color;
+
+                return mat;
+            };
+
+            Prefabs._cellOutlineMaterials = new Map();
+            Prefabs._cellOutlineMaterials['white'] = make('red', BABYLON.Color3.White());
+            Prefabs._cellOutlineMaterials['red'] = make('red', BABYLON.Color3.Red());
+            Prefabs._cellOutlineMaterials['blue'] = make('blue', BABYLON.Color3.Blue());
+        }
+
+        return Prefabs._cellOutlineMaterials;
+    }
+
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
 
@@ -1502,6 +1529,39 @@ class XMesh {
     }
 }
 
+class HexCellHightlight extends BABYLON.Mesh {
+    private _colorMaterials: Map<String, BABYLON.Material>;
+
+    constructor(name: string, scene: BABYLON.Scene, parent: BABYLON.Node, colorMaterials: Map<String, BABYLON.Material>) {
+        super(name, scene, parent);
+        
+        let options = {
+            size: 10,
+            width: 10,
+            height: 10,
+            updatable: true
+        };
+
+        let vertexData = BABYLON.VertexData.CreateGround(options);
+        vertexData.applyToMesh(this);
+
+        this._colorMaterials = colorMaterials;
+
+        this.material = colorMaterials['white'];
+        this.scaling.x = 1.7;
+        this.scaling.z = 1.7;
+        this.isVisible = false;
+    }
+
+    switch(color: string): void {
+        if (!this._colorMaterials[color]) {
+            throw new Error('Invalid color material');
+        }
+
+        this.material = this._colorMaterials[color];
+    }
+}
+
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!! 
  */
@@ -1511,6 +1571,7 @@ class HexCell extends BABYLON.Mesh {
     public coordinates: HexCoordinates;
     public neighbors: HexCell[] = new Array<HexCell>(6);
     public chunk: HexGridChunk;
+    public highlightSprite: HexCellHightlight;
 
     private _cellPosition: BABYLON.Vector3;
     private _elevation: number = Number.MIN_VALUE;
@@ -1893,6 +1954,17 @@ class HexCell extends BABYLON.Mesh {
 
         ctx.clearRect(0, 0, 64, 64);
         txt.drawText(str, null, null, "32px bold monospace", "black", "transparent", true);
+    }
+
+    public enableHighlight(color: Nullable<string>): void {
+        this.highlightSprite.isVisible = true;
+        if (color !== null) {
+            this.highlightSprite.switch(color);
+        }
+    }
+
+    public disableHighlight(): void {
+        this.highlightSprite.isVisible = false;
     }
 
     // Sets mesh render position from cellPosition (renders it slightly above).
@@ -3988,14 +4060,25 @@ export class HexGrid {
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
 
-        let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene),
+        // Cell material (dynamic text texture for displaying e.g. position/distance/...)
+        let material = new BABYLON.StandardMaterial(`${x}_${z}-material`, this._scene),
             textTexture = this.makeCellText(cell.coordinates.x.toString());
         material.diffuseTexture = textTexture;
         material.opacityTexture = textTexture;
         material.specularColor = BABYLON.Color3.Black();
         cell.material = material;
 
+        // Cell hightlight sprite..TODO.
+        cell.highlightSprite = new HexCellHightlight(
+            `hex_cell_highlight_${x}_${z}`, 
+            this._scene,
+            cell,
+            Prefabs.cellOutlineMaterials(this._scene),
+        );
+        // cell.highlightSprite.position = new BABYLON.Vector3 (0, 0, 0);
+
         cell.elevation = 0;
+
 
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i-1]);
@@ -4391,8 +4474,10 @@ export class HexMapEditor {
 
     private isPointerDown: boolean = false;
     private isDrag: boolean = false;
+    private isLeftShiftDown: boolean = false;
     private dragDirection: HexDirection;
     private previousCell: Nullable<HexCell>;
+    private _searchFromCell: Nullable<HexCell>;
 
     private _editTool: HexMapEditorTool;
     private _editMode: boolean = false;
@@ -4523,6 +4608,8 @@ export class HexMapEditor {
         this._scene.onPointerObservable.add(this.onPointerDown.bind(this), BABYLON.PointerEventTypes.POINTERDOWN);
         this._scene.onPointerObservable.add(this.onPointerUp.bind(this), BABYLON.PointerEventTypes.POINTERUP);
         this._scene.onPointerObservable.add(this.onPointerMove.bind(this), BABYLON.PointerEventTypes.POINTERMOVE);
+        this._scene.onKeyboardObservable.add(this.onKeyDown.bind(this), BABYLON.KeyboardEventTypes.KEYDOWN);
+        this._scene.onKeyboardObservable.add(this.onKeyUp.bind(this), BABYLON.KeyboardEventTypes.KEYUP);
     }
 
     private handleInput(): boolean {
@@ -4538,18 +4625,29 @@ export class HexMapEditor {
 
             if (this.previousCell && this.previousCell !== currentCell) {
                 this.validateDrag(currentCell);
-            } else {
+            } 
+            else {
                 this.isDrag = false;
             }
 
             if (this._editMode) {
                 this.editCells(currentCell);
-            } else {
+            }
+            else if (this.isLeftShiftDown) {
+                if (this._searchFromCell) {
+                    this._searchFromCell.disableHighlight();
+                }
+
+                this._searchFromCell = currentCell;
+                this._searchFromCell.enableHighlight('blue');
+            } 
+            else {
                 this.grid.findDistancesTo(currentCell);
             }
 
             this.previousCell = currentCell;
-        } else {
+        } 
+        else {
             this.previousCell = null;
         }
 
@@ -4577,6 +4675,14 @@ export class HexMapEditor {
         }        
 
         this.handleInput();
+    }
+
+    private onKeyDown(eventData: BABYLON.KeyboardInfo, eventState: BABYLON.EventState): void {
+        this.isLeftShiftDown = eventData.event.shiftKey;
+    }
+
+    private onKeyUp(eventData: BABYLON.KeyboardInfo, eventState: BABYLON.EventState): void {
+        this.isLeftShiftDown = false;
     }
 
     private validateDrag(currentCell: HexCell): void {

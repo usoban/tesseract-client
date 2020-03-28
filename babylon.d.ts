@@ -22181,6 +22181,10 @@ declare module BABYLON {
          */
         forceDepthWrite: boolean;
         /**
+         * Specifies the depth function that should be used. 0 means the default engine function
+         */
+        depthFunction: number;
+        /**
          * Specifies if there should be a separate pass for culling
          */
         separateCullingPass: boolean;
