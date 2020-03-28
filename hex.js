@@ -1140,6 +1140,54 @@ class XMesh {
         mesh.rotationQuaternion = XQuaternion.getRotationTo(currentAxis, destination);
     }
 }
+class HexCellPriorityQueue {
+    constructor() {
+        this._list = new Array();
+        this._minimum = Number.MAX_SAFE_INTEGER;
+    }
+    enqueue(cell) {
+        let priority = cell.searchPriority;
+        if (priority < this._minimum) {
+            this._minimum = priority;
+        }
+        while (priority >= this._list.length) {
+            this._list.push(null);
+        }
+        cell.nextWithSamePriority = this._list[priority];
+        this._list[priority] = cell;
+    }
+    dequeue() {
+        for (; this._minimum < this._list.length; this._minimum++) {
+            let cell = this._list[this._minimum];
+            if (cell !== null) {
+                this._list[this._minimum] = cell.nextWithSamePriority;
+                return cell;
+            }
+        }
+        return null;
+    }
+    change(cell, oldPriority) {
+        let current = this._list[oldPriority], next = current.nextWithSamePriority;
+        if (current === cell) {
+            this._list[oldPriority] = next;
+        }
+        else {
+            while (next !== cell) {
+                current = next;
+                next = current.nextWithSamePriority;
+            }
+            current.nextWithSamePriority = cell.nextWithSamePriority;
+        }
+        this.enqueue(cell);
+    }
+    clear() {
+        this._list = new Array();
+        this._minimum = Number.MAX_SAFE_INTEGER;
+    }
+    get length() {
+        return this._list.length;
+    }
+}
 class HexCellHightlight extends BABYLON.Mesh {
     constructor(name, scene, parent, colorMaterials) {
         super(name, scene, parent);
@@ -1171,6 +1219,7 @@ class HexCell extends BABYLON.Mesh {
     constructor(name, scene) {
         super(name, scene);
         this.neighbors = new Array(6);
+        this.searchHeuristic = 0;
         this._elevation = Number.MIN_VALUE;
         this._terrainTypeIndex = 0;
         this.roads = new Array(6);
@@ -1461,6 +1510,9 @@ class HexCell extends BABYLON.Mesh {
     }
     disableHighlight() {
         this.highlightSprite.isVisible = false;
+    }
+    get searchPriority() {
+        return this._distance + this.searchHeuristic;
     }
     // Sets mesh render position from cellPosition (renders it slightly above).
     refreshMeshPosition() {
@@ -2863,9 +2915,9 @@ export class HexGrid {
         let chunkX = ~~(x / HexMetrics.chunkSizeX), chunkZ = ~~(z / HexMetrics.chunkSizeZ), chunk = this.chunks[chunkX + chunkZ * this.chunkCountX], localX = x - chunkX * HexMetrics.chunkSizeX, localZ = z - chunkZ * HexMetrics.chunkSizeZ;
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
-    findDistancesTo(cell) {
+    findPath(fromCell, toCell) {
         Coroutines.stopAll();
-        Coroutines.start('search', this.search(cell));
+        Coroutines.start('search', this.search(fromCell, toCell));
     }
     save(writer) {
         writer.writeInt32(this.cellCountX);
@@ -2900,16 +2952,33 @@ export class HexGrid {
             c.showUI = show;
         });
     }
-    search(cell) {
+    search(fromCell, toCell) {
         const self = this;
-        this.cells.forEach(c => c.distance = Number.MAX_VALUE);
-        let frontier = [];
-        cell.distance = 0;
-        frontier.push(cell);
+        this.cells.forEach(c => {
+            c.distance = Number.MAX_VALUE;
+            c.disableHighlight();
+        });
+        fromCell.enableHighlight('blue');
+        toCell.enableHighlight('red');
+        if (!this._searchFrontier) {
+            this._searchFrontier = new HexCellPriorityQueue();
+        }
+        else {
+            this._searchFrontier.clear();
+        }
+        fromCell.distance = 0;
+        this._searchFrontier.enqueue(fromCell);
         return (function* () {
-            while (frontier.length > 0) {
+            while (self._searchFrontier.length > 0) {
                 yield 1000.0 / 60.0;
-                let current = frontier.shift();
+                let current = self._searchFrontier.dequeue();
+                if (current === toCell) {
+                    do {
+                        current = current.pathFrom;
+                        current.enableHighlight('white');
+                    } while (current.pathFrom !== fromCell);
+                    break;
+                }
                 for (let d = HexDirection.NE; d <= HexDirection.NW; d++) {
                     let neighbor = current.getNeighbor(d);
                     if (!neighbor) {
@@ -2935,12 +3004,16 @@ export class HexGrid {
                     }
                     if (neighbor.distance === Number.MAX_VALUE) {
                         neighbor.distance = distance;
-                        frontier.push(neighbor);
+                        neighbor.pathFrom = current;
+                        neighbor.searchHeuristic = neighbor.coordinates.distanceTo(toCell.coordinates);
+                        self._searchFrontier.enqueue(neighbor);
                     }
                     else if (distance < neighbor.distance) {
+                        let oldPriority = neighbor.searchPriority;
                         neighbor.distance = distance;
+                        neighbor.pathFrom = current;
+                        self._searchFrontier.change(neighbor, oldPriority);
                     }
-                    frontier.sort((a, b) => a.distance - b.distance);
                 }
             }
             return;
@@ -3202,15 +3275,19 @@ export class HexMapEditor {
             if (this._editMode) {
                 this.editCells(currentCell);
             }
-            else if (this.isLeftShiftDown) {
+            else if (this.isLeftShiftDown && this._searchToCell !== currentCell) {
                 if (this._searchFromCell) {
                     this._searchFromCell.disableHighlight();
                 }
                 this._searchFromCell = currentCell;
                 this._searchFromCell.enableHighlight('blue');
+                if (this._searchToCell) {
+                    this.grid.findPath(this._searchFromCell, this._searchToCell);
+                }
             }
-            else {
-                this.grid.findDistancesTo(currentCell);
+            else if (this._searchFromCell && this._searchFromCell !== currentCell) {
+                this._searchToCell = currentCell;
+                this.grid.findPath(this._searchFromCell, this._searchToCell);
             }
             this.previousCell = currentCell;
         }

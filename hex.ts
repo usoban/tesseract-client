@@ -1529,6 +1529,66 @@ class XMesh {
     }
 }
 
+class HexCellPriorityQueue {
+    private _list: Array<HexCell> = new Array<Nullable<HexCell>>();
+    private _minimum: number = Number.MAX_SAFE_INTEGER;
+
+    public enqueue(cell: HexCell): void {
+        let priority = cell.searchPriority;
+        
+        if (priority < this._minimum) {
+            this._minimum = priority;
+        }
+
+        while (priority >= this._list.length) {
+            this._list.push(null);
+        }
+        
+        cell.nextWithSamePriority = this._list[priority];
+        this._list[priority] = cell;
+    }
+
+    public dequeue(): Nullable<HexCell> {
+        for (; this._minimum < this._list.length; this._minimum++) {
+            let cell = this._list[this._minimum];
+            if (cell !== null) {
+                this._list[this._minimum] = cell.nextWithSamePriority;
+                return cell;
+            }
+        }
+
+        return null;
+    }
+
+    public change(cell: HexCell, oldPriority: number): void {
+        let 
+            current: HexCell = this._list[oldPriority],
+            next: HexCell = current.nextWithSamePriority;
+
+        if (current === cell) {
+            this._list[oldPriority] = next;
+        }
+        else {
+            while (next !== cell) {
+                current = next;
+                next = current.nextWithSamePriority;
+            }
+            current.nextWithSamePriority = cell.nextWithSamePriority;
+        }
+
+        this.enqueue(cell);
+    }
+
+    public clear(): void {
+        this._list = new Array<Nullable<HexCell>>();
+        this._minimum = Number.MAX_SAFE_INTEGER;
+    }
+
+    get length(): number {
+        return this._list.length;
+    }
+}
+
 class HexCellHightlight extends BABYLON.Mesh {
     private _colorMaterials: Map<String, BABYLON.Material>;
 
@@ -1572,6 +1632,9 @@ class HexCell extends BABYLON.Mesh {
     public neighbors: HexCell[] = new Array<HexCell>(6);
     public chunk: HexGridChunk;
     public highlightSprite: HexCellHightlight;
+    public pathFrom: HexCell;
+    public searchHeuristic: number = 0;
+    public nextWithSamePriority: Nullable<HexCell>;
 
     private _cellPosition: BABYLON.Vector3;
     private _elevation: number = Number.MIN_VALUE;
@@ -1965,6 +2028,10 @@ class HexCell extends BABYLON.Mesh {
 
     public disableHighlight(): void {
         this.highlightSprite.isVisible = false;
+    }
+
+    get searchPriority(): number {
+        return this._distance + this.searchHeuristic;
     }
 
     // Sets mesh render position from cellPosition (renders it slightly above).
@@ -3868,6 +3935,7 @@ export class HexGrid {
     public cells: HexCell[];
     public chunks: HexGridChunk[];
     private _scene: BABYLON.Scene;
+    private _searchFrontier: HexCellPriorityQueue;
 
     private _onAwakeObservable: BABYLON.Observable<any>;
     private _isLoaded: boolean = false;
@@ -4133,9 +4201,9 @@ export class HexGrid {
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
 
-    public findDistancesTo(cell: HexCell): void {
+    public findPath(fromCell: HexCell, toCell: HexCell): void {
         Coroutines.stopAll();
-        Coroutines.start('search', this.search(cell))
+        Coroutines.start('search', this.search(fromCell, toCell));
     }
 
     public save(writer: ByteBuffer): void {
@@ -4187,19 +4255,40 @@ export class HexGrid {
         });
     }
 
-    search(cell: HexCell): any {
+    search(fromCell: HexCell, toCell: HexCell): any {
         const self = this;
 
-        this.cells.forEach(c => c.distance = Number.MAX_VALUE);
+        this.cells.forEach(c => {
+            c.distance = Number.MAX_VALUE
+            c.disableHighlight();
+        });
 
-        let frontier: HexCell[] = [];
-        cell.distance = 0;
-        frontier.push(cell);
+        fromCell.enableHighlight('blue');
+        toCell.enableHighlight('red');
+
+        if (!this._searchFrontier) {
+            this._searchFrontier = new HexCellPriorityQueue();
+        } else {
+            this._searchFrontier.clear();
+        }
+
+        fromCell.distance = 0;
+        this._searchFrontier.enqueue(fromCell);
 
         return (function* () {
-            while (frontier.length > 0) {
+            while (self._searchFrontier.length > 0) {
                 yield 1000.0/60.0;
-                let current = frontier.shift();
+                let current: HexCell = self._searchFrontier.dequeue();
+                
+                if (current === toCell) {
+                    do {
+                        current = current.pathFrom;
+                        current.enableHighlight('white');
+                    } while(current.pathFrom !== fromCell);
+
+                    break;
+                }
+
                 for (let d: HexDirection = HexDirection.NE; d <= HexDirection.NW; d++) {
                     let neighbor = current.getNeighbor(d);
                     if (!neighbor) {
@@ -4228,13 +4317,16 @@ export class HexGrid {
 
                     if (neighbor.distance === Number.MAX_VALUE) {
                         neighbor.distance = distance;
-                        frontier.push(neighbor);
+                        neighbor.pathFrom = current;
+                        neighbor.searchHeuristic = neighbor.coordinates.distanceTo(toCell.coordinates);
+                        self._searchFrontier.enqueue(neighbor);
                     } 
                     else if (distance < neighbor.distance) {
+                        let oldPriority = neighbor.searchPriority;
                         neighbor.distance = distance;
+                        neighbor.pathFrom = current;
+                        self._searchFrontier.change(neighbor, oldPriority);
                     }
-
-                    frontier.sort((a: HexCell, b: HexCell) => a.distance - b.distance);
                 }
             }
 
@@ -4478,6 +4570,7 @@ export class HexMapEditor {
     private dragDirection: HexDirection;
     private previousCell: Nullable<HexCell>;
     private _searchFromCell: Nullable<HexCell>;
+    private _searchToCell: Nullable<HexCell>;
 
     private _editTool: HexMapEditorTool;
     private _editMode: boolean = false;
@@ -4633,16 +4726,20 @@ export class HexMapEditor {
             if (this._editMode) {
                 this.editCells(currentCell);
             }
-            else if (this.isLeftShiftDown) {
+            else if (this.isLeftShiftDown && this._searchToCell !== currentCell) {
                 if (this._searchFromCell) {
                     this._searchFromCell.disableHighlight();
                 }
 
                 this._searchFromCell = currentCell;
                 this._searchFromCell.enableHighlight('blue');
+                if (this._searchToCell) {
+                    this.grid.findPath(this._searchFromCell, this._searchToCell);
+                }
             } 
-            else {
-                this.grid.findDistancesTo(currentCell);
+            else if (this._searchFromCell && this._searchFromCell !== currentCell) {
+                this._searchToCell = currentCell;
+                this.grid.findPath(this._searchFromCell, this._searchToCell);
             }
 
             this.previousCell = currentCell;
