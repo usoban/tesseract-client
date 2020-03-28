@@ -1635,6 +1635,7 @@ class HexCell extends BABYLON.Mesh {
     public pathFrom: HexCell;
     public searchHeuristic: number = 0;
     public nextWithSamePriority: Nullable<HexCell>;
+    public searchPhase: number = 0;
 
     private _cellPosition: BABYLON.Vector3;
     private _elevation: number = Number.MIN_VALUE;
@@ -1995,10 +1996,6 @@ class HexCell extends BABYLON.Mesh {
     set showUI(show: boolean) {
         this._showUI = show;
         this.isVisible = show;
-        
-        if (show) {
-            this.updateDistanceLabel();
-        }
     }
 
     get distance(): number {
@@ -2007,16 +2004,15 @@ class HexCell extends BABYLON.Mesh {
 
     set distance(distance: number) {
         this._distance = distance;
-        this.updateDistanceLabel();
     }
 
-    public updateDistanceLabel(): void {
-        let str = this.distance === Number.MAX_VALUE ? "" : this.distance.toString();
+    public setLabel(label: Nullable<String>): void {
         let txt: any = (<BABYLON.StandardMaterial>this.material).diffuseTexture,
         ctx = txt.getContext();
 
         ctx.clearRect(0, 0, 64, 64);
-        txt.drawText(str, null, null, "32px bold monospace", "black", "transparent", true);
+        label = label || '';
+        txt.drawText(label, null, null, "32px bold monospace", "black", "transparent", true);
     }
 
     public enableHighlight(color: Nullable<string>): void {
@@ -3936,6 +3932,10 @@ export class HexGrid {
     public chunks: HexGridChunk[];
     private _scene: BABYLON.Scene;
     private _searchFrontier: HexCellPriorityQueue;
+    public searchFrontierPhase: number = 0;
+    private _currentPathFrom: HexCell;
+    private _currentPathTo: HexCell;
+    private _currentPathExits: boolean;
 
     private _onAwakeObservable: BABYLON.Observable<any>;
     private _isLoaded: boolean = false;
@@ -4047,6 +4047,7 @@ export class HexGrid {
             return false;
         }
 
+        this.clearPath();
         if (this.chunks) {
             this.chunks.forEach((chunk: HexGridChunk) => {
                 chunk.destroy();
@@ -4136,14 +4137,12 @@ export class HexGrid {
         material.specularColor = BABYLON.Color3.Black();
         cell.material = material;
 
-        // Cell hightlight sprite..TODO.
         cell.highlightSprite = new HexCellHightlight(
             `hex_cell_highlight_${x}_${z}`, 
             this._scene,
             cell,
             Prefabs.cellOutlineMaterials(this._scene),
         );
-        // cell.highlightSprite.position = new BABYLON.Vector3 (0, 0, 0);
 
         cell.elevation = 0;
 
@@ -4171,21 +4170,9 @@ export class HexGrid {
     }
 
     private makeCellText(txt: string): BABYLON.DynamicTexture {
-        // let size = 16;
         let DTw = 64;
         let DTh = 64;
         let textTexture = new BABYLON.DynamicTexture("DT", {width: DTw, height: DTh}, this._scene, false);
-        // textTexture.hasAlpha = true;
-        // let textCtx = textTexture.getContext();
-        // textCtx.font = `${size}px bold monospace`;
-        // textCtx.fillStyle = "transparent";
-        // let textWidth = textCtx.measureText(txt).width;
-        // let ratio = textWidth/size;
-        // let fontSize = Math.floor(DTw / ratio);
-        // console.log("fontSize: ", fontSize);
-        // textTexture.drawText(txt, null, null, `${fontSize}px bold monospace`, "black", null);
-
-        textTexture.drawText(txt, null, null, `32px bold monospace`, "black", "transparent", true, true);
 
         return textTexture;
     }
@@ -4201,9 +4188,50 @@ export class HexGrid {
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
 
-    public findPath(fromCell: HexCell, toCell: HexCell): void {
-        Coroutines.stopAll();
-        Coroutines.start('search', this.search(fromCell, toCell));
+    public findPath(fromCell: HexCell, toCell: HexCell, speed: number): void {
+        // let s: number, e: number;
+        // s = performance.now();
+        
+        this.clearPath();
+        this._currentPathFrom = fromCell;
+        this._currentPathTo = toCell;
+        this._currentPathExits = this.search(fromCell, toCell, speed);
+        this.showPath(speed);
+
+        // e = performance.now();
+        // console.log(`Search took: ${e - s} ms.`);
+    }
+
+    public showPath(speed: number): void {
+        if (this._currentPathExits) {
+            let current = this._currentPathTo;
+            while (current != this._currentPathFrom) {
+                let turn = Math.floor(current.distance/speed);
+                current.setLabel(turn.toString());
+                current.enableHighlight('white');
+                current = current.pathFrom;
+            }
+        }
+        this._currentPathFrom.enableHighlight('blue');
+        this._currentPathTo.enableHighlight('red');
+    }
+
+    public clearPath(): void {
+        if (this._currentPathExits) {
+            let current = this._currentPathTo;
+            while (current != this._currentPathFrom) {
+                current.setLabel(null);
+                current.disableHighlight();
+                current = current.pathFrom;
+            }
+            current.disableHighlight();
+            this._currentPathExits = false;
+        }
+        else if (this._currentPathFrom) {
+            this._currentPathFrom.disableHighlight();
+            this._currentPathTo.disableHighlight();
+        }
+        this._currentPathFrom = this._currentPathTo = null;
     }
 
     public save(writer: ByteBuffer): void {
@@ -4214,8 +4242,6 @@ export class HexGrid {
     }
 
     public load(reader: ByteBuffer): void {
-        Coroutines.stopAll();
-
         let 
             cellCountX = reader.readInt32(),
             cellCountZ = reader.readInt32();
@@ -4226,13 +4252,12 @@ export class HexGrid {
             }    
         }
 
+        this.clearPath();
         this.cells.forEach((cell: HexCell) => cell.load(reader));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
     }
 
     public loadFromObject(grid: any): void {
-        Coroutines.stopAll();
-
         let 
             cellCountX = grid.cell_count_x,
             cellCountZ = grid.cell_count_z;
@@ -4245,6 +4270,7 @@ export class HexGrid {
 
         let cells = Object.keys(grid.cells).map(k => grid.cells[k]);
 
+        this.clearPath();
         this.cells.forEach((cell: HexCell) => cell.loadFromObject(cells.shift()));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
     }
@@ -4255,16 +4281,8 @@ export class HexGrid {
         });
     }
 
-    search(fromCell: HexCell, toCell: HexCell): any {
-        const self = this;
-
-        this.cells.forEach(c => {
-            c.distance = Number.MAX_VALUE
-            c.disableHighlight();
-        });
-
-        fromCell.enableHighlight('blue');
-        toCell.enableHighlight('red');
+    search(fromCell: HexCell, toCell: HexCell, speed: number): boolean {
+        this.searchFrontierPhase += 2;
 
         if (!this._searchFrontier) {
             this._searchFrontier = new HexCellPriorityQueue();
@@ -4272,66 +4290,72 @@ export class HexGrid {
             this._searchFrontier.clear();
         }
 
+        fromCell.searchPhase = this.searchFrontierPhase;
         fromCell.distance = 0;
         this._searchFrontier.enqueue(fromCell);
 
-        return (function* () {
-            while (self._searchFrontier.length > 0) {
-                yield 1000.0/60.0;
-                let current: HexCell = self._searchFrontier.dequeue();
-                
-                if (current === toCell) {
-                    do {
-                        current = current.pathFrom;
-                        current.enableHighlight('white');
-                    } while(current.pathFrom !== fromCell);
-
-                    break;
-                }
-
-                for (let d: HexDirection = HexDirection.NE; d <= HexDirection.NW; d++) {
-                    let neighbor = current.getNeighbor(d);
-                    if (!neighbor) {
-                        continue;
-                    }
-                    if (neighbor.isUnderwater) {
-                        continue;
-                    }
-
-                    let edgeType = current.getEdgeTypeForCell(neighbor);
-                    if (edgeType === HexEdgeType.Cliff) {
-                        continue;
-                    }
-
-                    let distance = current.distance;
-                    if (current.hasRoadThroughEdge(d)) {
-                        distance += 1;
-                    }
-                    else if (current.walled != neighbor.walled) {
-                        continue;
-                    } 
-                    else {
-                        distance += edgeType == HexEdgeType.Flat ? 5 : 10;
-                        distance += neighbor.urbanLevel + neighbor.farmLevel + neighbor.plantLevel;
-                    }
-
-                    if (neighbor.distance === Number.MAX_VALUE) {
-                        neighbor.distance = distance;
-                        neighbor.pathFrom = current;
-                        neighbor.searchHeuristic = neighbor.coordinates.distanceTo(toCell.coordinates);
-                        self._searchFrontier.enqueue(neighbor);
-                    } 
-                    else if (distance < neighbor.distance) {
-                        let oldPriority = neighbor.searchPriority;
-                        neighbor.distance = distance;
-                        neighbor.pathFrom = current;
-                        self._searchFrontier.change(neighbor, oldPriority);
-                    }
-                }
+        while (this._searchFrontier.length > 0) {
+            let current: HexCell = this._searchFrontier.dequeue();
+            if (!current) {
+                break;
             }
 
-            return;
-        });
+            current.searchPhase += 1;
+
+            if (current === toCell) {
+                return true;
+            }
+
+            let currentTurn = Math.floor(current.distance/speed);
+            for (let d: HexDirection = HexDirection.NE; d <= HexDirection.NW; d++) {
+                let neighbor = current.getNeighbor(d);
+                if (!neighbor || neighbor.searchPhase > this.searchFrontierPhase) {
+                    continue;
+                }
+                if (neighbor.isUnderwater) {
+                    continue;
+                }
+
+                let edgeType = current.getEdgeTypeForCell(neighbor);
+                if (edgeType === HexEdgeType.Cliff) {
+                    continue;
+                }
+
+                let moveCost: number;
+                if (current.hasRoadThroughEdge(d)) {
+                    moveCost = 1;
+                }
+                else if (current.walled != neighbor.walled) {
+                    continue;
+                } 
+                else {
+                    moveCost = edgeType == HexEdgeType.Flat ? 5 : 10;
+                    moveCost += neighbor.urbanLevel + neighbor.farmLevel + neighbor.plantLevel;
+                }
+
+                let distance = current.distance + moveCost;
+                let turn = Math.floor(distance/speed);
+                if (turn > currentTurn) {
+                    distance = turn * speed + moveCost;
+                }
+
+                if (neighbor.searchPhase < this.searchFrontierPhase) {
+                    neighbor.searchPhase = this.searchFrontierPhase;
+                    neighbor.distance = distance;
+                    neighbor.pathFrom = current;
+                    neighbor.searchHeuristic = neighbor.coordinates.distanceTo(toCell.coordinates);
+                    this._searchFrontier.enqueue(neighbor);
+                } 
+                else if (distance < neighbor.distance) {
+                    let oldPriority = neighbor.searchPriority;
+                    neighbor.distance = distance;
+                    neighbor.pathFrom = current;
+                    this._searchFrontier.change(neighbor, oldPriority);
+                }
+            }
+        }
+
+        return false;
     }
 }
 
@@ -4493,7 +4517,7 @@ class HexMapEditorTool {
 
     addPanelToggleSlider(
         label: string, 
-        minVal: number, 
+        minVal: number,
         maxVal: number, 
         defaultVal: number, 
         toggleCallbackFn: (a: any) => void, 
@@ -4595,35 +4619,35 @@ export class HexMapEditor {
     private makePanels() {
 
         let
-            editPanel = new HexMapEditorTool("panel-edit"),
-            creatorPanel = new HexMapEditorTool("panel-new");
+            editPanel = new HexMapEditorTool('panel-edit'),
+            creatorPanel = new HexMapEditorTool('panel-new');
 
         // ==========================================
         // ============ Edit panel. =================
         let 
             i = 0,
             terrainTypeSelection = [
-                {label: "Ignore", value: -1},
-                {label: "Sand", value: 0},
-                {label: "Grass", value: 1},
-                {label: "Mud", value: 2},
-                {label: "Stone", value: 3},
-                {label: "Snow", value: 4}
+                {label: 'Ignore', value: -1},
+                {label: 'Sand', value: 0},
+                {label: 'Grass', value: 1},
+                {label: 'Mud', value: 2},
+                {label: 'Stone', value: 3},
+                {label: 'Snow', value: 4}
             ];
         
-        editPanel.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
-        editPanel.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
-        editPanel.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
-        editPanel.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
-        editPanel.addPanelToggleSlider("Elevation", 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
-        editPanel.addPanelToggleSlider("Water level", 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
-        editPanel.addPanelToggleSlider("Special", 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
-        editPanel.addPanelToggleSlider("Urban level", 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
-        editPanel.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
-        editPanel.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
-        editPanel.addPanelToggleSlider("Brush", 0, 4, 0, () => {}, this.setBrushSize.bind(this));
-        editPanel.addPanelCheckbox("Grid", this.toggleGrid.bind(this));
-        editPanel.addPanelCheckbox("Edit", this.toggleEdit.bind(this));
+        editPanel.addPanelSelect('Terrain', terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
+        editPanel.addPanelSelect('River', HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
+        editPanel.addPanelSelect('Road', HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
+        editPanel.addPanelSelect('Wall', HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
+        editPanel.addPanelToggleSlider('Elevation', 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
+        editPanel.addPanelToggleSlider('Water level', 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
+        editPanel.addPanelToggleSlider('Special', 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
+        editPanel.addPanelToggleSlider('Urban level', 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
+        editPanel.addPanelToggleSlider('Farm level', 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
+        editPanel.addPanelToggleSlider('Plant level', 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
+        editPanel.addPanelToggleSlider('Brush', 0, 4, 0, () => {}, this.setBrushSize.bind(this));
+        editPanel.addPanelCheckbox('Grid', this.toggleGrid.bind(this));
+        editPanel.addPanelCheckbox('Edit', this.toggleEdit.bind(this));
 
         let 
             btnGroup = document.createElement('div'),
@@ -4631,8 +4655,8 @@ export class HexMapEditor {
             loadBtn = document.createElement('input'),
             newMapBtn = document.createElement('button');
 
-        saveBtn.innerText = "Save";
-        // loadBtn.innerText = "Load";
+        saveBtn.innerText = 'Save';
+        // loadBtn.innerText = 'Load';
         loadBtn.type = 'File';
         newMapBtn.innerText = 'New Map';
 
@@ -4727,19 +4751,23 @@ export class HexMapEditor {
                 this.editCells(currentCell);
             }
             else if (this.isLeftShiftDown && this._searchToCell !== currentCell) {
-                if (this._searchFromCell) {
-                    this._searchFromCell.disableHighlight();
-                }
-
-                this._searchFromCell = currentCell;
-                this._searchFromCell.enableHighlight('blue');
-                if (this._searchToCell) {
-                    this.grid.findPath(this._searchFromCell, this._searchToCell);
+                if (this._searchFromCell !== currentCell) {
+                    if (this._searchFromCell) {
+                        this._searchFromCell.disableHighlight();
+                    }
+    
+                    this._searchFromCell = currentCell;
+                    this._searchFromCell.enableHighlight('blue');
+                    if (this._searchToCell) {
+                        this.grid.findPath(this._searchFromCell, this._searchToCell, 24);
+                    }
                 }
             } 
             else if (this._searchFromCell && this._searchFromCell !== currentCell) {
-                this._searchToCell = currentCell;
-                this.grid.findPath(this._searchFromCell, this._searchToCell);
+                if (this._searchToCell !== currentCell) {
+                    this._searchToCell = currentCell;
+                    this.grid.findPath(this._searchFromCell, this._searchToCell, 24);
+                }
             }
 
             this.previousCell = currentCell;
@@ -4986,7 +5014,7 @@ export class HexMapEditor {
             linkEl = document.createElement('a');
 
         linkEl.href = link;
-        linkEl.innerText = "Download";
+        linkEl.innerText = 'Download';
 
         saveLink.innerHTML = '';
         saveLink.appendChild(linkEl);
@@ -5005,7 +5033,7 @@ export class HexMapEditor {
                 this.grid.load(byteBuffer);
             }
             else {
-                console.error("Unknown map format " + version);
+                console.error('Unknown map format ' + version);
             }
 
         };
