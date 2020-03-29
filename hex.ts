@@ -625,6 +625,7 @@ class Prefabs {
     private static _towerMaterial: BABYLON.PBRMaterial;
     private static _bridgeMaterial: BABYLON.PBRMaterial;
     private static _cellOutlineMaterials: Map<String, BABYLON.StandardMaterial>;
+    private static _unitMaterial: BABYLON.StandardMaterial;
     private static _sandTexture: BABYLON.Texture;
     private static _stoneTexture: BABYLON.Texture;
     private static _snowTexture: BABYLON.Texture;
@@ -1224,6 +1225,17 @@ class Prefabs {
         return Prefabs._cellOutlineMaterials;
     }
 
+    public static unitMaterial(scene: BABYLON.Scene): BABYLON.StandardMaterial {
+        if (!Prefabs._unitMaterial) {
+            Prefabs._unitMaterial = new BABYLON.StandardMaterial(`uinit_material`, scene);
+            Prefabs._unitMaterial.diffuseColor = BABYLON.Color3.Blue();
+            Prefabs._unitMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._unitMaterial.specularColor = BABYLON.Color3.Black();
+        }
+    
+        return Prefabs._unitMaterial;
+    }
+
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
 
@@ -1416,6 +1428,14 @@ class Prefabs {
         castle.material = Prefabs.urbanFeatureMaterial(scene);
 
         return castle;
+    }
+
+    public static unit(name: string, scene: BABYLON.Scene) {
+        let unitMesh = new HexUnit(`unit_${name}`, scene);
+
+        unitMesh.material = Prefabs.unitMaterial(scene);
+     
+        return unitMesh;
     }
 }
 
@@ -1622,6 +1642,64 @@ class HexCellHightlight extends BABYLON.Mesh {
     }
 }
 
+class HexUnit extends BABYLON.Mesh {
+    private _location: HexCell;
+    private _orientation: number;
+
+    constructor(name: string, scene: BABYLON.Scene) {
+        super(name, scene);
+
+        let options = {
+            width: 3,
+            height: 10,
+            depth: 3
+        };
+
+        let vertexData = BABYLON.VertexData.CreateBox(options);
+        vertexData.applyToMesh(this);
+        
+        this.isPickable = true;
+        this.isVisible = true;
+    }
+
+    private fixPosition(): void {
+        this.position.y += 5;
+    }
+
+    get location(): HexCell {
+        return this._location;
+    }
+
+    set location(cell: HexCell) {
+        this._location = cell;
+        this.validateLocation();
+        cell.unit = this;
+    }
+
+    get orientation(): number {
+        return this._orientation;
+    }
+
+    set orientation(value: number) {
+        this._orientation = value;
+        this.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, value, 0);
+    }
+
+    public validateLocation(): void {
+        this.position = this._location.position.clone();
+        this.fixPosition();
+    }
+
+    public die(): void {
+        if (this.location) {
+            this.location.unit = null;
+        }
+
+        this.dispose();
+    }
+}
+
+
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!! 
  */
@@ -1636,6 +1714,7 @@ class HexCell extends BABYLON.Mesh {
     public searchHeuristic: number = 0;
     public nextWithSamePriority: Nullable<HexCell>;
     public searchPhase: number = 0;
+    public unit: HexUnit;
 
     private _cellPosition: BABYLON.Vector3;
     private _elevation: number = Number.MIN_VALUE;
@@ -2062,10 +2141,17 @@ class HexCell extends BABYLON.Mesh {
                 n.chunk.refresh();
             }
         }
+
+        if (this.unit) {
+            this.unit.validateLocation();
+        }
     }
 
     public refreshSelfOnly(): void {
         this.chunk.refresh();
+        if (this.unit) {
+            this.unit.validateLocation();
+        }
     }
 
     public save(writer: ByteBuffer): void {
@@ -3931,6 +4017,7 @@ export class HexGrid {
     public cells: HexCell[];
     public chunks: HexGridChunk[];
     private _scene: BABYLON.Scene;
+    private _units: Array<HexUnit> = new Array<HexUnit>();
     private _searchFrontier: HexCellPriorityQueue;
     public searchFrontierPhase: number = 0;
     private _currentPathFrom: HexCell;
@@ -4048,6 +4135,7 @@ export class HexGrid {
         }
 
         this.clearPath();
+        this.clearUnits();
         if (this.chunks) {
             this.chunks.forEach((chunk: HexGridChunk) => {
                 chunk.destroy();
@@ -4253,6 +4341,7 @@ export class HexGrid {
         }
 
         this.clearPath();
+        this.clearUnits();
         this.cells.forEach((cell: HexCell) => cell.load(reader));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
     }
@@ -4271,6 +4360,7 @@ export class HexGrid {
         let cells = Object.keys(grid.cells).map(k => grid.cells[k]);
 
         this.clearPath();
+        this.clearUnits();
         this.cells.forEach((cell: HexCell) => cell.loadFromObject(cells.shift()));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
     }
@@ -4356,6 +4446,28 @@ export class HexGrid {
         }
 
         return false;
+    }
+
+
+    addUnit(unit: HexUnit, location: HexCell, orientation: number): void {
+        this._units.push(unit);
+        unit.location = location;
+        unit.orientation = orientation;
+    }
+
+    removeUnit(unit: HexUnit): void {
+        let idx = this._units.indexOf(unit);
+
+        if (idx > -1) {
+            this._units.splice(idx, 1);
+        }
+
+        unit.die();
+    }
+
+    clearUnits(): void {
+        this._units.forEach((u: HexUnit) => u.die());
+        this._units = new Array<HexUnit>();
     }
 }
 
@@ -4729,17 +4841,40 @@ export class HexMapEditor {
         this._scene.onKeyboardObservable.add(this.onKeyUp.bind(this), BABYLON.KeyboardEventTypes.KEYUP);
     }
 
+    public createUnit(): void {
+        let cell = this.getCellUnderCursor();
+
+        if (cell && !cell.unit) {
+            let unit = Prefabs.unit('kek', this._scene);
+            this.grid.addUnit(unit, cell, Math.random() * 360);
+        }
+    }
+
+    public destroyUnit(): void {
+        let cell = this.getCellUnderCursor();
+        if (cell && cell.unit) {
+            this.grid.removeUnit(cell.unit);
+        }
+    }
+
+    public getCellUnderCursor(): Nullable<HexCell> {
+        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
+        
+        if (!pickResult.hit || !(pickResult.pickedMesh instanceof HexMesh)) {
+            return null;
+        }        
+
+        return this.grid.getCell(pickResult.pickedPoint);
+    }
+
     private handleInput(): boolean {
         if (HexMapEditor.POINTER_BLOCKED_BY_GUI) {
             this.previousCell = null;
             return false;
         }
-
-        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
         
-        if (pickResult.hit && pickResult.pickedMesh instanceof HexMesh) {
-            let currentCell = this.grid.getCell(pickResult.pickedPoint);
-
+        let currentCell = this.getCellUnderCursor();        
+        if (currentCell) {
             if (this.previousCell && this.previousCell !== currentCell) {
                 this.validateDrag(currentCell);
             } 
@@ -4804,6 +4939,16 @@ export class HexMapEditor {
 
     private onKeyDown(eventData: BABYLON.KeyboardInfo, eventState: BABYLON.EventState): void {
         this.isLeftShiftDown = eventData.event.shiftKey;
+
+        if (eventData.event.key.toLowerCase() === 'u') {
+            if (this.isLeftShiftDown) {
+                this.destroyUnit();                
+            }
+            else {
+                this.createUnit();
+            }
+
+        }
     }
 
     private onKeyUp(eventData: BABYLON.KeyboardInfo, eventState: BABYLON.EventState): void {

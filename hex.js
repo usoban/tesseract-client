@@ -874,6 +874,15 @@ class Prefabs {
         }
         return Prefabs._cellOutlineMaterials;
     }
+    static unitMaterial(scene) {
+        if (!Prefabs._unitMaterial) {
+            Prefabs._unitMaterial = new BABYLON.StandardMaterial(`uinit_material`, scene);
+            Prefabs._unitMaterial.diffuseColor = BABYLON.Color3.Blue();
+            Prefabs._unitMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._unitMaterial.specularColor = BABYLON.Color3.Black();
+        }
+        return Prefabs._unitMaterial;
+    }
     static terrain(name, scene) {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
@@ -1010,6 +1019,11 @@ class Prefabs {
         castle.isPickable = false;
         castle.material = Prefabs.urbanFeatureMaterial(scene);
         return castle;
+    }
+    static unit(name, scene) {
+        let unitMesh = new HexUnit(`unit_${name}`, scene);
+        unitMesh.material = Prefabs.unitMaterial(scene);
+        return unitMesh;
     }
 }
 Prefabs.GRID_ON = "#define GRID_ON";
@@ -1210,6 +1224,48 @@ class HexCellHightlight extends BABYLON.Mesh {
             throw new Error('Invalid color material');
         }
         this.material = this._colorMaterials[color];
+    }
+}
+class HexUnit extends BABYLON.Mesh {
+    constructor(name, scene) {
+        super(name, scene);
+        let options = {
+            width: 3,
+            height: 10,
+            depth: 3
+        };
+        let vertexData = BABYLON.VertexData.CreateBox(options);
+        vertexData.applyToMesh(this);
+        this.isPickable = true;
+        this.isVisible = true;
+    }
+    fixPosition() {
+        this.position.y += 5;
+    }
+    get location() {
+        return this._location;
+    }
+    set location(cell) {
+        this._location = cell;
+        this.validateLocation();
+        cell.unit = this;
+    }
+    get orientation() {
+        return this._orientation;
+    }
+    set orientation(value) {
+        this._orientation = value;
+        this.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, value, 0);
+    }
+    validateLocation() {
+        this.position = this._location.position.clone();
+        this.fixPosition();
+    }
+    die() {
+        if (this.location) {
+            this.location.unit = null;
+        }
+        this.dispose();
     }
 }
 /**
@@ -1536,9 +1592,15 @@ class HexCell extends BABYLON.Mesh {
                 n.chunk.refresh();
             }
         }
+        if (this.unit) {
+            this.unit.validateLocation();
+        }
     }
     refreshSelfOnly() {
         this.chunk.refresh();
+        if (this.unit) {
+            this.unit.validateLocation();
+        }
     }
     save(writer) {
         writer.writeUint8(this._terrainTypeIndex);
@@ -2741,6 +2803,7 @@ export class HexGrid {
     constructor(scene) {
         this.cellCountX = 20;
         this.cellCountZ = 15;
+        this._units = new Array();
         this.searchFrontierPhase = 0;
         this._isLoaded = false;
         this._onLoaded = [];
@@ -2810,6 +2873,7 @@ export class HexGrid {
             return false;
         }
         this.clearPath();
+        this.clearUnits();
         if (this.chunks) {
             this.chunks.forEach((chunk) => {
                 chunk.destroy();
@@ -2955,6 +3019,7 @@ export class HexGrid {
             }
         }
         this.clearPath();
+        this.clearUnits();
         this.cells.forEach((cell) => cell.load(reader));
         this.chunks.forEach((chunk) => chunk.refresh());
     }
@@ -2967,6 +3032,7 @@ export class HexGrid {
         }
         let cells = Object.keys(grid.cells).map(k => grid.cells[k]);
         this.clearPath();
+        this.clearUnits();
         this.cells.forEach((cell) => cell.loadFromObject(cells.shift()));
         this.chunks.forEach((chunk) => chunk.refresh());
     }
@@ -3040,6 +3106,22 @@ export class HexGrid {
             }
         }
         return false;
+    }
+    addUnit(unit, location, orientation) {
+        this._units.push(unit);
+        unit.location = location;
+        unit.orientation = orientation;
+    }
+    removeUnit(unit) {
+        let idx = this._units.indexOf(unit);
+        if (idx > -1) {
+            this._units.splice(idx, 1);
+        }
+        unit.die();
+    }
+    clearUnits() {
+        this._units.forEach((u) => u.die());
+        this._units = new Array();
     }
 }
 HexGrid.CHUNKS_TO_REFRESH = new Map();
@@ -3280,14 +3362,33 @@ export class HexMapEditor {
         this._scene.onKeyboardObservable.add(this.onKeyDown.bind(this), BABYLON.KeyboardEventTypes.KEYDOWN);
         this._scene.onKeyboardObservable.add(this.onKeyUp.bind(this), BABYLON.KeyboardEventTypes.KEYUP);
     }
+    createUnit() {
+        let cell = this.getCellUnderCursor();
+        if (cell && !cell.unit) {
+            let unit = Prefabs.unit('kek', this._scene);
+            this.grid.addUnit(unit, cell, Math.random() * 360);
+        }
+    }
+    destroyUnit() {
+        let cell = this.getCellUnderCursor();
+        if (cell && cell.unit) {
+            this.grid.removeUnit(cell.unit);
+        }
+    }
+    getCellUnderCursor() {
+        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
+        if (!pickResult.hit || !(pickResult.pickedMesh instanceof HexMesh)) {
+            return null;
+        }
+        return this.grid.getCell(pickResult.pickedPoint);
+    }
     handleInput() {
         if (HexMapEditor.POINTER_BLOCKED_BY_GUI) {
             this.previousCell = null;
             return false;
         }
-        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
-        if (pickResult.hit && pickResult.pickedMesh instanceof HexMesh) {
-            let currentCell = this.grid.getCell(pickResult.pickedPoint);
+        let currentCell = this.getCellUnderCursor();
+        if (currentCell) {
             if (this.previousCell && this.previousCell !== currentCell) {
                 this.validateDrag(currentCell);
             }
@@ -3342,6 +3443,14 @@ export class HexMapEditor {
     }
     onKeyDown(eventData, eventState) {
         this.isLeftShiftDown = eventData.event.shiftKey;
+        if (eventData.event.key.toLowerCase() === 'u') {
+            if (this.isLeftShiftDown) {
+                this.destroyUnit();
+            }
+            else {
+                this.createUnit();
+            }
+        }
     }
     onKeyUp(eventData, eventState) {
         this.isLeftShiftDown = false;
