@@ -214,6 +214,19 @@ class Filesys {
     }
 }
 
+class Bezier {
+    public static getPoint(a: BABYLON.Vector3, b: BABYLON.Vector3, c: BABYLON.Vector3, t: number): BABYLON.Vector3 {
+        let r  = 1.0 - t;
+        // r * r * a + 2f * r * t * b + t * t * c;
+        return a.scale(r * r).add(b.scale(2.0 * r * t)).add(c.scale(t * t));
+    }
+
+    public static getDerivative(a: BABYLON.Vector3, b: BABYLON.Vector3, c: BABYLON.Vector3, t: number): BABYLON.Vector3 {
+        // 2f * ((1f - t) * (b - a) + t * (c - b));
+        return b.subtract(a).scale(1.0 - t).add(c.subtract(b).scale(t)).scale(2.0);
+    }
+}
+
 class HexMetrics {
     public static outerToInner = 0.866025404;
     public static innerToOuter = 1.0 / HexMetrics.outerToInner;
@@ -1529,6 +1542,27 @@ class XQuaternion {
 
         return q;
     }
+
+     /** Returns a new Quaternion set from the passed vector position. */
+    public static LookRotation(position:BABYLON.Vector3):BABYLON.Quaternion {
+        let result: BABYLON.Quaternion = BABYLON.Quaternion.Zero();
+        XQuaternion.LookRotationToRef(position, result);
+        return result;
+    }
+
+    /** Returns a new Quaternion set from the passed vector position. */
+    public static LookRotationToRef(position:BABYLON.Vector3, result:BABYLON.Quaternion):void {
+        BABYLON.TmpVectors.Matrix[0].reset();
+        BABYLON.Matrix.LookAtLHToRef(BABYLON.Vector3.Zero(), position, BABYLON.Vector3.Up(), BABYLON.TmpVectors.Matrix[0]);
+        BABYLON.TmpVectors.Matrix[0].invert();
+        BABYLON.Quaternion.FromRotationMatrixToRef(BABYLON.TmpVectors.Matrix[0], result);
+    }
+
+    // This below is Unity's implementation of Quaternion.Angle/2
+    public static angle(a: BABYLON.Quaternion, b: BABYLON.Quaternion): number {
+        let f = BABYLON.Quaternion.Dot(a, b);
+        return Math.acos(Math.min(Math.abs(f), 1.0)) * 2.0 * 57.29578;
+    }
 }
 
 class XMesh {
@@ -1652,8 +1686,13 @@ class HexCellHightlight extends BABYLON.Mesh {
 }
 
 class HexUnit extends BABYLON.Mesh {
+    private static TRAVEL_SPEED = 4.0;
+    private static ROTATION_SPEED = 180.0;
+
     private _location: HexCell;
     private _orientation: number;
+    private _pathGizmo: BABYLON.Mesh = null;
+    public _pathToTravel: Nullable<Array<HexCell>> = null;
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -1669,6 +1708,53 @@ class HexUnit extends BABYLON.Mesh {
         
         this.isPickable = true;
         this.isVisible = true;
+        this.onBeforeRenderObservable.add(this._beforeDraw.bind(this));
+    }
+
+    private _beforeDraw(): void {
+        if (this._pathToTravel === null || this._pathToTravel.length === 0) {
+            return;
+        }
+
+        if (this._pathToTravel && this._pathGizmo) {
+            return;
+        }
+
+        let a, b, c = this._pathToTravel[0].position;
+        let points = [];
+        for (let i = 1; i < this._pathToTravel.length; i++) {
+            a = c;
+            b = this._pathToTravel[i - 1].position;
+            c = b.add(this._pathToTravel[i].position).scale(0.5);
+            for (let t = 0.0; t <= 1.0; t += 0.1) {
+                points.push(Bezier.getPoint(a, b, c, t));
+            }
+        }
+
+        a = c;
+        b = this._pathToTravel[this._pathToTravel.length - 1].position;
+        c = b;
+        for (let t = 0.0; t < 1.0; t += 0.1) {
+            points.push(Bezier.getPoint(a, b, c, t));
+        }
+
+        this._pathGizmo = BABYLON.MeshBuilder.CreateTube(
+            'path', 
+            {
+                path: points, 
+                radius: 0.5, 
+                sideOrientation: BABYLON.Mesh.DOUBLESIDE, 
+                updatable: true
+            }, 
+            this._scene
+        );
+    }
+
+    private disposePathGizmo(): void {
+        if (this._pathGizmo) {
+            this._pathGizmo.dispose();
+            this._pathGizmo = null;
+        }
     }
 
     private fixPosition(): void {
@@ -1698,6 +1784,15 @@ class HexUnit extends BABYLON.Mesh {
         this.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, value, 0);
     }
 
+    get pathToTravel(): Nullable<Array<HexCell>> {
+        return this._pathToTravel;
+    }
+
+    set pathToTravel(path: Array<HexCell>) {
+        this._pathToTravel = path;
+        this.disposePathGizmo();
+    }
+
     public validateLocation(): void {
         this.position = this._location.position.clone();
         this.fixPosition();
@@ -1705,6 +1800,103 @@ class HexUnit extends BABYLON.Mesh {
 
     public isValidDestination(cell: HexCell): boolean {
         return !cell.isUnderwater && !cell.unit;
+    }
+
+    public travel(path: Array<HexCell>): void {
+        this.location = path[path.length - 1];
+        this.pathToTravel = path;
+        Coroutines.stopAll();
+        Coroutines.start(`travel_${this.name}`, this.travelPath());
+    }
+
+    private travelPath() {
+        let self = this;
+
+        return function* () {
+            let a, b, c = self.pathToTravel[0].position.clone();
+            
+            self.position = c.clone();
+            self.fixPosition();
+
+            let lookAtGen = self.lookAtPoint(self.pathToTravel[1].position.clone())(), r = null;
+            do {
+                r = lookAtGen.next();
+                yield r.value;
+            } while(!r.done);
+
+            let t = (self._scene.getEngine().getDeltaTime()/1000) * HexUnit.TRAVEL_SPEED;
+
+            for (let i = 1; i < self.pathToTravel.length; i++) {
+                a = c;
+                b = self.pathToTravel[i - 1].position;
+                c = b.add(self.pathToTravel[i].position).scale(0.5);
+                for (; t < 1.0; t += (self._scene.getEngine().getDeltaTime()/1000) * HexUnit.TRAVEL_SPEED) {
+                    // Position.
+                    self.position = Bezier.getPoint(a, b, c, t);
+                    self.fixPosition();
+
+                    // Orientation.
+                    let d = Bezier.getDerivative(a, b, c, t);
+                    d.y = 0;
+                    self.rotationQuaternion = XQuaternion.LookRotation(d);
+
+                    yield null;
+                }
+                t -= 1.0;
+            }
+
+            a = c;
+            b = self.pathToTravel[self.pathToTravel.length - 1].position;
+            c = b;
+            for (; t < 1.0; t += (self._scene.getEngine().getDeltaTime()/1000) * HexUnit.TRAVEL_SPEED) {
+                // Position.
+                self.position = Bezier.getPoint(a, b, c, t);
+                self.fixPosition();
+
+                // Orientation.
+                let d = Bezier.getDerivative(a, b, c, t);
+                d.y = 0;
+                self.rotationQuaternion = XQuaternion.LookRotation(d);
+
+                yield null;
+            }
+
+            self.position = self.location.position.clone();
+            self.fixPosition();
+
+            self.orientation = self.rotation.toQuaternion().toEulerAngles().y;
+            self.pathToTravel = null;
+
+            return;
+        };
+    }
+
+    private lookAtPoint(point: BABYLON.Vector3): any {
+        let self = this;
+
+        return function* () {
+            point.y = self.position.y;
+
+            let 
+                fromRotation = self.rotationQuaternion,
+                toRotation = XQuaternion.LookRotation(point.subtract(self.position)),
+                angle = XQuaternion.angle(fromRotation, toRotation),
+                speed = HexUnit.ROTATION_SPEED/angle;
+
+            if (angle > 0) {
+                for (
+                    let t = (self._scene.getEngine().getDeltaTime()/1000) * speed; 
+                    t < 1.0; 
+                    t += (self._scene.getEngine().getDeltaTime()/1000) * speed
+                ) {
+                    self.rotationQuaternion = BABYLON.Quaternion.Slerp(fromRotation, toRotation, t);
+                    yield null;
+                }    
+            }
+
+            self.lookAt(point);
+            self.orientation = self.rotationQuaternion.toEulerAngles().y;
+        };
     }
 
     public die(): void {
@@ -4334,7 +4526,7 @@ export class HexGrid {
         if (this._currentPathExits) {
             let current = this._currentPathTo;
             while (current != this._currentPathFrom) {
-                let turn = Math.floor(current.distance/speed);
+                let turn = Math.floor((current.distance - 1)/speed);
                 current.setLabel(turn.toString());
                 current.enableHighlight('white');
                 current = current.pathFrom;
@@ -4446,7 +4638,7 @@ export class HexGrid {
                 return true;
             }
 
-            let currentTurn = Math.floor(current.distance/speed);
+            let currentTurn = Math.floor((current.distance - 1)/speed);
             for (let d: HexDirection = HexDirection.NE; d <= HexDirection.NW; d++) {
                 let neighbor = current.getNeighbor(d);
                 if (!neighbor || neighbor.searchPhase > this.searchFrontierPhase) {
@@ -4474,7 +4666,7 @@ export class HexGrid {
                 }
 
                 let distance = current.distance + moveCost;
-                let turn = Math.floor(distance/speed);
+                let turn = Math.floor((distance - 1)/speed);
                 if (turn > currentTurn) {
                     distance = turn * speed + moveCost;
                 }
@@ -4522,6 +4714,21 @@ export class HexGrid {
 
     get hasPath(): boolean {
         return this._currentPathExits;
+    }
+
+    public getPath(): Nullable<Array<HexCell>> {
+        if (!this._currentPathExits) {
+            return null;
+        }
+
+        let path = [];
+        for (let c = this._currentPathTo; c != this._currentPathFrom; c = c.pathFrom) {
+            path.push(c);
+        }
+        path.push(this._currentPathFrom);
+        path.reverse();
+        
+        return path;
     }
 }
 
@@ -5336,7 +5543,7 @@ export class HexGUI {
 
     public doMove(): void {
         if (this._grid.hasPath) {
-            this._selectedUnit.location = this._currentCell;
+            this._selectedUnit.travel(this._grid.getPath());
             this._grid.clearPath();
         }
     }
@@ -5444,30 +5651,61 @@ export class HexGUI {
 class Coroutines {
     private static HANDLES: Map<String, Generator> = new Map();
     private static TIMERS: Map<String, any> = new Map();
+    private static ANIMATION_FRAME_REQUEST_ID = null;
 
     public static stopAll(): void {
+        // console.log('Stopping all coroutines');
         Coroutines.HANDLES.forEach((g: Generator, _) => g.return());
         Coroutines.TIMERS.forEach((t: any, _) => clearTimeout(t));
         Coroutines.HANDLES = new Map();
         Coroutines.TIMERS = new Map();
+        
+        if (Coroutines.ANIMATION_FRAME_REQUEST_ID) {
+            window.cancelAnimationFrame(Coroutines.ANIMATION_FRAME_REQUEST_ID);
+            Coroutines.ANIMATION_FRAME_REQUEST_ID = null;
+        }
     }
 
     public static start(id: string, generator): void {
-        Coroutines.HANDLES[id] = generator();
+        Coroutines.HANDLES.set(id, generator());
         this.run(id);
+
+        if (!Coroutines.ANIMATION_FRAME_REQUEST_ID) {
+            Coroutines.ANIMATION_FRAME_REQUEST_ID = window.requestAnimationFrame(Coroutines.runOnFrame);
+        }
+    }
+
+    public static runOnFrame(): void {
+        // console.log('runnning frame...');
+        Coroutines.TIMERS.forEach((t: any, id: string) => {
+            if (t === null) {
+                // console.log(`Running corouting ${id} on frame.`);
+                Coroutines.run(id);
+            }
+        });
+
+        Coroutines.ANIMATION_FRAME_REQUEST_ID = window.requestAnimationFrame(Coroutines.runOnFrame);
     }
 
     private static run(id: string): void {
-        let result = Coroutines.HANDLES[id].next();
+        let result = Coroutines.HANDLES.get(id).next();
 
         if (!result.done) {
             let sleep = result.value;
 
             if (sleep !== null) {
-                Coroutines.TIMERS[id] = setTimeout(() => Coroutines.run(id), sleep);
-            } else {
-                Coroutines.run(id);
+                // console.log(`Coroutine ${id} scheduled after ${sleep}ms.`);
+                Coroutines.TIMERS.set(id, setTimeout(() => Coroutines.run(id), sleep));
+            } 
+            else {
+                // console.log(`Coroutine ${id} scheduled for next frame.`);
+                Coroutines.TIMERS.set(id, null);
             }
+        } 
+        else {
+            // console.log(`Coroutine ${id} terminated itself.`);
+            Coroutines.HANDLES.delete(id);
+            Coroutines.TIMERS.delete(id);
         }
     }
 }
