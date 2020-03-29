@@ -436,6 +436,13 @@ export class HexCoordinates {
     toString() {
         return `(${this.x}, ${this.y}, ${this.z})`;
     }
+    save(writer) {
+        writer.writeUint8(this.x);
+        writer.writeUint8(this.z);
+    }
+    static load(reader) {
+        return new HexCoordinates(reader.readUint8(), reader.readUint8());
+    }
 }
 class HexHash {
     static create(randomFn) {
@@ -1266,6 +1273,14 @@ class HexUnit extends BABYLON.Mesh {
             this.location.unit = null;
         }
         this.dispose();
+    }
+    save(writer) {
+        this.location.coordinates.save(writer);
+        writer.writeFloat32(this._orientation);
+    }
+    static load(reader, grid) {
+        let coordinates = HexCoordinates.load(reader), orientation = reader.readFloat32();
+        grid.addUnit(Prefabs.unit('0', grid._scene), grid.getCellByHexCoordinates(coordinates), orientation);
     }
 }
 /**
@@ -3010,8 +3025,10 @@ export class HexGrid {
         writer.writeInt32(this.cellCountX);
         writer.writeInt32(this.cellCountZ);
         this.cells.forEach((cell) => cell.save(writer));
+        writer.writeUint8(this._units.length);
+        this._units.forEach((unit) => unit.save(writer));
     }
-    load(reader) {
+    load(reader, header) {
         let cellCountX = reader.readInt32(), cellCountZ = reader.readInt32();
         if (cellCountX != this.cellCountX || cellCountZ != this.cellCountZ) {
             if (!this.createMap(cellCountX, cellCountZ)) {
@@ -3022,6 +3039,12 @@ export class HexGrid {
         this.clearUnits();
         this.cells.forEach((cell) => cell.load(reader));
         this.chunks.forEach((chunk) => chunk.refresh());
+        if (header >= 1) {
+            let unitCount = reader.readUint8();
+            for (let i = 0; i < unitCount; i++) {
+                HexUnit.load(reader, this);
+            }
+        }
     }
     loadFromObject(grid) {
         let cellCountX = grid.cell_count_x, cellCountZ = grid.cell_count_z;
@@ -3605,7 +3628,7 @@ export class HexMapEditor {
             this._editTool.container.appendChild(saveLink);
         }
         let dataWriter = new ByteBuffer();
-        dataWriter.writeUint32(0); // Version header.
+        dataWriter.writeUint32(1); // Version header.
         this.grid.save(dataWriter);
         let link = Filesys.write(dataWriter.buffer), linkEl = document.createElement('a');
         linkEl.href = link;
@@ -3618,8 +3641,8 @@ export class HexMapEditor {
         reader.onload = (e) => {
             let byteBuffer = ByteBuffer.make(new DataView(reader.result));
             let version = byteBuffer.readUint32();
-            if (version === 0) {
-                this.grid.load(byteBuffer);
+            if (version <= 1) {
+                this.grid.load(byteBuffer, version);
             }
             else {
                 console.error('Unknown map format ' + version);

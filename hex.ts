@@ -586,6 +586,15 @@ export class HexCoordinates {
     public toString() {
         return `(${this.x}, ${this.y}, ${this.z})`;
     }
+
+    public save(writer: ByteBuffer): void {
+        writer.writeUint8(this.x);
+        writer.writeUint8(this.z);
+    }
+
+    public static load(reader: ByteBuffer): HexCoordinates {
+        return new HexCoordinates(reader.readUint8(), reader.readUint8());
+    }
 }
 
 class HexHash {
@@ -1697,6 +1706,19 @@ class HexUnit extends BABYLON.Mesh {
 
         this.dispose();
     }
+
+    public save(writer: ByteBuffer): void {
+        this.location.coordinates.save(writer);
+        writer.writeFloat32(this._orientation);
+    }
+
+    public static load(reader: ByteBuffer, grid: HexGrid): void {
+        let coordinates = HexCoordinates.load(reader),
+            orientation = reader.readFloat32();
+
+        grid.addUnit(Prefabs.unit('0', grid._scene), grid.getCellByHexCoordinates(coordinates), orientation);
+    }
+
 }
 
 
@@ -4016,7 +4038,7 @@ export class HexGrid {
 
     public cells: HexCell[];
     public chunks: HexGridChunk[];
-    private _scene: BABYLON.Scene;
+    public _scene: BABYLON.Scene;
     private _units: Array<HexUnit> = new Array<HexUnit>();
     private _searchFrontier: HexCellPriorityQueue;
     public searchFrontierPhase: number = 0;
@@ -4327,9 +4349,12 @@ export class HexGrid {
         writer.writeInt32(this.cellCountZ);
 
         this.cells.forEach((cell: HexCell) => cell.save(writer));
+
+        writer.writeUint8(this._units.length);
+        this._units.forEach((unit: HexUnit) => unit.save(writer));
     }
 
-    public load(reader: ByteBuffer): void {
+    public load(reader: ByteBuffer, header: number): void {
         let 
             cellCountX = reader.readInt32(),
             cellCountZ = reader.readInt32();
@@ -4344,6 +4369,13 @@ export class HexGrid {
         this.clearUnits();
         this.cells.forEach((cell: HexCell) => cell.load(reader));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
+
+        if (header >= 1) {
+            let unitCount = reader.readUint8();
+            for (let i = 0; i < unitCount; i++) {
+                HexUnit.load(reader, this);
+            }
+        }
     }
 
     public loadFromObject(grid: any): void {
@@ -5151,7 +5183,7 @@ export class HexMapEditor {
 
         let dataWriter = new ByteBuffer();
 
-        dataWriter.writeUint32(0); // Version header.
+        dataWriter.writeUint32(1); // Version header.
         this.grid.save(dataWriter);
 
         let
@@ -5174,8 +5206,8 @@ export class HexMapEditor {
             let byteBuffer = ByteBuffer.make(new DataView(<ArrayBuffer>reader.result));
             
             let version = byteBuffer.readUint32();
-            if (version === 0) {
-                this.grid.load(byteBuffer);
+            if (version <= 1)   {
+                this.grid.load(byteBuffer, version);
             }
             else {
                 console.error('Unknown map format ' + version);
