@@ -1680,6 +1680,10 @@ class HexUnit extends BABYLON.Mesh {
     }
 
     set location(cell: HexCell) {
+        if (this._location) {
+            this._location.unit = null;
+        }
+
         this._location = cell;
         this.validateLocation();
         cell.unit = this;
@@ -1697,6 +1701,10 @@ class HexUnit extends BABYLON.Mesh {
     public validateLocation(): void {
         this.position = this._location.position.clone();
         this.fixPosition();
+    }
+
+    public isValidDestination(cell: HexCell): boolean {
+        return !cell.isUnderwater && !cell.unit;
     }
 
     public die(): void {
@@ -4213,6 +4221,16 @@ export class HexGrid {
         return this.cells[index];
     }
 
+    getCellByRay(ray: BABYLON.Ray): Nullable<HexCell> {
+        let pickResult = this._scene.pickWithRay(ray);
+
+        if (pickResult && pickResult.hit) {
+            return this.getCell(pickResult.pickedPoint);
+        }
+
+        return null;
+    }
+
     getCellByHexCoordinates(coordinates: HexCoordinates): Nullable<HexCell> {
         const
             z = coordinates.z,
@@ -4434,7 +4452,7 @@ export class HexGrid {
                 if (!neighbor || neighbor.searchPhase > this.searchFrontierPhase) {
                     continue;
                 }
-                if (neighbor.isUnderwater) {
+                if (neighbor.isUnderwater || neighbor.unit) {
                     continue;
                 }
 
@@ -4500,6 +4518,10 @@ export class HexGrid {
     clearUnits(): void {
         this._units.forEach((u: HexUnit) => u.die());
         this._units = new Array<HexUnit>();
+    }
+
+    get hasPath(): boolean {
+        return this._currentPathExits;
     }
 }
 
@@ -4708,8 +4730,10 @@ class HexMapEditorTool {
 export class HexMapEditor {
     public static POINTER_BLOCKED_BY_GUI = false;
 
+    private _enabled: boolean = false;
     private grid: HexGrid;
     private _net: Game.Net;
+    private _gui: HexGUI;
     private _scene: BABYLON.Scene;
     
     private activeTerrainTypeIndex: number;
@@ -4737,16 +4761,13 @@ export class HexMapEditor {
     private isLeftShiftDown: boolean = false;
     private dragDirection: HexDirection;
     private previousCell: Nullable<HexCell>;
-    private _searchFromCell: Nullable<HexCell>;
-    private _searchToCell: Nullable<HexCell>;
 
     private _editTool: HexMapEditorTool;
-    private _editMode: boolean = false;
-
     private _nBots = 1;
 
-    constructor(grid: HexGrid, net: Game.Net) {
+    constructor(grid: HexGrid, gui: HexGUI, net: Game.Net) {
         this.grid = grid;
+        this._gui = gui;
         this._net = net;
 
         this.makePanels();
@@ -4758,6 +4779,14 @@ export class HexMapEditor {
         return names.map(name => {
             return {label: name, value: enumerable[name]};
         });
+    }
+
+    get enabled(): boolean {
+        return this._enabled;
+    }
+
+    set enabled(value: boolean) {
+        this._enabled = value;
     }
 
     private makePanels() {
@@ -4791,7 +4820,10 @@ export class HexMapEditor {
         editPanel.addPanelToggleSlider('Plant level', 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
         editPanel.addPanelToggleSlider('Brush', 0, 4, 0, () => {}, this.setBrushSize.bind(this));
         editPanel.addPanelCheckbox('Grid', this.toggleGrid.bind(this));
-        editPanel.addPanelCheckbox('Edit', this.toggleEdit.bind(this));
+        editPanel.addPanelCheckbox('Edit', (value) => {
+            this.setEditMode(value);
+            this._gui.setEditMode(value);
+        });
 
         let 
             btnGroup = document.createElement('div'),
@@ -4866,11 +4898,11 @@ export class HexMapEditor {
     attachCameraControl(camera: BABYLON.FreeCamera): void {
         this._scene = camera.getScene();
 
-        this._scene.onPointerObservable.add(this.onPointerDown.bind(this), BABYLON.PointerEventTypes.POINTERDOWN);
-        this._scene.onPointerObservable.add(this.onPointerUp.bind(this), BABYLON.PointerEventTypes.POINTERUP);
-        this._scene.onPointerObservable.add(this.onPointerMove.bind(this), BABYLON.PointerEventTypes.POINTERMOVE);
-        this._scene.onKeyboardObservable.add(this.onKeyDown.bind(this), BABYLON.KeyboardEventTypes.KEYDOWN);
-        this._scene.onKeyboardObservable.add(this.onKeyUp.bind(this), BABYLON.KeyboardEventTypes.KEYUP);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerDown), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerUp), BABYLON.PointerEventTypes.POINTERUP);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerMove), BABYLON.PointerEventTypes.POINTERMOVE);
+        this._scene.onKeyboardObservable.add(this.whenEnabled(this.onKeyDown), BABYLON.KeyboardEventTypes.KEYDOWN);
+        this._scene.onKeyboardObservable.add(this.whenEnabled(this.onKeyUp), BABYLON.KeyboardEventTypes.KEYUP);
     }
 
     public createUnit(): void {
@@ -4890,13 +4922,14 @@ export class HexMapEditor {
     }
 
     public getCellUnderCursor(): Nullable<HexCell> {
-        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
-        
-        if (!pickResult.hit || !(pickResult.pickedMesh instanceof HexMesh)) {
-            return null;
-        }        
-
-        return this.grid.getCell(pickResult.pickedPoint);
+        let ray = this._scene.createPickingRay(
+            this._scene.pointerX,
+            this._scene.pointerY,
+            BABYLON.Matrix.Identity(),
+            this._scene.activeCamera
+        );
+ 
+        return this.grid.getCellByRay(ray);
     }
 
     private handleInput(): boolean {
@@ -4914,29 +4947,7 @@ export class HexMapEditor {
                 this.isDrag = false;
             }
 
-            if (this._editMode) {
-                this.editCells(currentCell);
-            }
-            else if (this.isLeftShiftDown && this._searchToCell !== currentCell) {
-                if (this._searchFromCell !== currentCell) {
-                    if (this._searchFromCell) {
-                        this._searchFromCell.disableHighlight();
-                    }
-    
-                    this._searchFromCell = currentCell;
-                    this._searchFromCell.enableHighlight('blue');
-                    if (this._searchToCell) {
-                        this.grid.findPath(this._searchFromCell, this._searchToCell, 24);
-                    }
-                }
-            } 
-            else if (this._searchFromCell && this._searchFromCell !== currentCell) {
-                if (this._searchToCell !== currentCell) {
-                    this._searchToCell = currentCell;
-                    this.grid.findPath(this._searchFromCell, this._searchToCell, 24);
-                }
-            }
-
+            this.editCells(currentCell);
             this.previousCell = currentCell;
         } 
         else {
@@ -4944,6 +4955,16 @@ export class HexMapEditor {
         }
 
         return true;
+    }
+
+    private whenEnabled(f: (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void): 
+        (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void 
+    {
+        return ((a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => {
+            if (this._enabled) {
+                f.call(this, a, b);
+            }
+        }).bind(this);
     }
 
     private onPointerDown(eventData: BABYLON.PointerInfo, eventState: BABYLON.EventState): void {
@@ -5167,9 +5188,8 @@ export class HexMapEditor {
         Prefabs.toggleTerrainGrid();
     }
 
-    toggleEdit(state: boolean): void {
-        this._editMode = state;
-        this.grid.showUI(!state);
+    setEditMode(toggle: boolean): void {
+        this._enabled = toggle;
     }
 
     public save(): void {
@@ -5247,26 +5267,118 @@ export class HexMapEditor {
 }
 
 export class HexGUI {
+    private _enabled: boolean = true;
+
+    // Dependencies.
+    private _grid: HexGrid;
     private _net: Game.Net;
     private _gameState: Game.State;
 
+    // Own properties.
+    private _currentCell: Nullable<HexCell>;
+    private _selectedUnit: Nullable<HexUnit>;
+
+    // Visual components.
     private _nextTurnBtn: HTMLButtonElement;
     private _turnCounter: HTMLSpanElement;
     private _turnPlayerLabel: HTMLSpanElement;
 
-    constructor(gameState: Game.State, net: Game.Net) {
+    constructor(grid: HexGrid, gameState: Game.State, net: Game.Net) {
+        this._grid = grid;
         this._gameState = gameState;
         this._net = net;
 
         this.init();
     }
 
+    public setEditMode(toggle: boolean): void {
+        this._enabled = !toggle;
+        this._grid.showUI(!toggle);
+        this._grid.clearPath();
+    }
+
+    public updateCurrentCell(): boolean {
+        let ray = this._grid._scene.createPickingRay(
+            this._grid._scene.pointerX,
+            this._grid._scene.pointerY,
+            BABYLON.Matrix.Identity(),
+            null
+        );
+
+        let cell = this._grid.getCellByRay(ray);
+
+        if (cell !== this._currentCell) {
+            this._currentCell = cell;
+            return true;
+        }
+
+        return false;
+    }
+
+    public doSelection(): void {
+        this._grid.clearPath();
+        this.updateCurrentCell();
+        if (this._currentCell) {
+            this._selectedUnit = this._currentCell.unit;
+        }
+    }
+
+    public doPathfinding(): void {
+        if (this.updateCurrentCell()) {
+            if (this._currentCell && this._selectedUnit.isValidDestination(this._currentCell)) {
+                this._grid.findPath(this._selectedUnit.location, this._currentCell, 24);
+            } 
+            else {
+                this._grid.clearPath();
+            }
+        }
+    }
+
+    public doMove(): void {
+        if (this._grid.hasPath) {
+            this._selectedUnit.location = this._currentCell;
+            this._grid.clearPath();
+        }
+    }
+
+    // Initialization & updates.
     private init(): void {
         this.initNextTurnButton();
         this.initTurnCounter();
         this.initTurnPlayerLabel();
 
         this._gameState.registerObserver('HexGUI', this.onGameStateChanged.bind(this));
+        this._grid._scene.onPointerObservable.add(this.whenEnabled(this.onPointerDown), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._grid._scene.onPointerObservable.add(this.whenEnabled(this.onPointerMove), BABYLON.PointerEventTypes.POINTERMOVE);
+    }
+
+    private whenEnabled(f: (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void): 
+        (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void 
+    {
+        return ((a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => {
+            if (this._enabled) {
+                f.call(this, a, b);
+            }
+        }).bind(this);
+    }
+
+    private onPointerDown(info: BABYLON.PointerInfo, state: BABYLON.EventState): void {
+        if (info.event.which === 1) {
+            this.doSelection();
+        }
+        else if (info.event.which === 3) {
+            if (this._selectedUnit) {
+                this.doMove();
+            }
+        }
+    }
+
+    private onPointerMove(info: BABYLON.PointerInfo, state: BABYLON.EventState): void {
+        if (!this._selectedUnit) {
+            return;
+        }
+
+        this.doPathfinding();
     }
 
     private initNextTurnButton(): void {

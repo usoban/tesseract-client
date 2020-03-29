@@ -53,9 +53,9 @@ export namespace Game {
 
             this._hexGrid = new HexGrid(this._scene);
 
-            this._gui = new HexGUI(this._state, this._net);
+            this._gui = new HexGUI(this._hexGrid, this._state, this._net);
 
-            this._hexMapEditor = new HexMapEditor(this._hexGrid, this._net);
+            this._hexMapEditor = new HexMapEditor(this._hexGrid, this._gui, this._net);
             this._hexMapEditor.attachCameraControl(this._camera);
 
             (<any>window).editor = this._hexMapEditor;

@@ -1253,6 +1253,9 @@ class HexUnit extends BABYLON.Mesh {
         return this._location;
     }
     set location(cell) {
+        if (this._location) {
+            this._location.unit = null;
+        }
         this._location = cell;
         this.validateLocation();
         cell.unit = this;
@@ -1267,6 +1270,9 @@ class HexUnit extends BABYLON.Mesh {
     validateLocation() {
         this.position = this._location.position.clone();
         this.fixPosition();
+    }
+    isValidDestination(cell) {
+        return !cell.isUnderwater && !cell.unit;
     }
     die() {
         if (this.location) {
@@ -2929,6 +2935,13 @@ export class HexGrid {
         let coordinates = HexCoordinates.fromPosition(position), index = coordinates.x + coordinates.z * this.cellCountX + Math.floor(coordinates.z / 2.0);
         return this.cells[index];
     }
+    getCellByRay(ray) {
+        let pickResult = this._scene.pickWithRay(ray);
+        if (pickResult && pickResult.hit) {
+            return this.getCell(pickResult.pickedPoint);
+        }
+        return null;
+    }
     getCellByHexCoordinates(coordinates) {
         const z = coordinates.z, x = coordinates.x + ~~(z / 2);
         if (z < 0 || z >= this.cellCountZ || x < 0 || x >= this.cellCountX) {
@@ -3090,7 +3103,7 @@ export class HexGrid {
                 if (!neighbor || neighbor.searchPhase > this.searchFrontierPhase) {
                     continue;
                 }
-                if (neighbor.isUnderwater) {
+                if (neighbor.isUnderwater || neighbor.unit) {
                     continue;
                 }
                 let edgeType = current.getEdgeTypeForCell(neighbor);
@@ -3145,6 +3158,9 @@ export class HexGrid {
     clearUnits() {
         this._units.forEach((u) => u.die());
         this._units = new Array();
+    }
+    get hasPath() {
+        return this._currentPathExits;
     }
 }
 HexGrid.CHUNKS_TO_REFRESH = new Map();
@@ -3279,7 +3295,8 @@ class HexMapEditorTool {
     }
 }
 export class HexMapEditor {
-    constructor(grid, net) {
+    constructor(grid, gui, net) {
+        this._enabled = false;
         this.activeElevation = 0.0;
         this.activeWaterLevel = 0.0;
         this.activeUrbanLevel = 0.0;
@@ -3299,9 +3316,9 @@ export class HexMapEditor {
         this.isPointerDown = false;
         this.isDrag = false;
         this.isLeftShiftDown = false;
-        this._editMode = false;
         this._nBots = 1;
         this.grid = grid;
+        this._gui = gui;
         this._net = net;
         this.makePanels();
     }
@@ -3310,6 +3327,12 @@ export class HexMapEditor {
         return names.map(name => {
             return { label: name, value: enumerable[name] };
         });
+    }
+    get enabled() {
+        return this._enabled;
+    }
+    set enabled(value) {
+        this._enabled = value;
     }
     makePanels() {
         let editPanel = new HexMapEditorTool('panel-edit'), creatorPanel = new HexMapEditorTool('panel-new');
@@ -3335,7 +3358,10 @@ export class HexMapEditor {
         editPanel.addPanelToggleSlider('Plant level', 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
         editPanel.addPanelToggleSlider('Brush', 0, 4, 0, () => { }, this.setBrushSize.bind(this));
         editPanel.addPanelCheckbox('Grid', this.toggleGrid.bind(this));
-        editPanel.addPanelCheckbox('Edit', this.toggleEdit.bind(this));
+        editPanel.addPanelCheckbox('Edit', (value) => {
+            this.setEditMode(value);
+            this._gui.setEditMode(value);
+        });
         let btnGroup = document.createElement('div'), saveBtn = document.createElement('button'), loadBtn = document.createElement('input'), newMapBtn = document.createElement('button');
         saveBtn.innerText = 'Save';
         // loadBtn.innerText = 'Load';
@@ -3379,11 +3405,11 @@ export class HexMapEditor {
     }
     attachCameraControl(camera) {
         this._scene = camera.getScene();
-        this._scene.onPointerObservable.add(this.onPointerDown.bind(this), BABYLON.PointerEventTypes.POINTERDOWN);
-        this._scene.onPointerObservable.add(this.onPointerUp.bind(this), BABYLON.PointerEventTypes.POINTERUP);
-        this._scene.onPointerObservable.add(this.onPointerMove.bind(this), BABYLON.PointerEventTypes.POINTERMOVE);
-        this._scene.onKeyboardObservable.add(this.onKeyDown.bind(this), BABYLON.KeyboardEventTypes.KEYDOWN);
-        this._scene.onKeyboardObservable.add(this.onKeyUp.bind(this), BABYLON.KeyboardEventTypes.KEYUP);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerDown), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerUp), BABYLON.PointerEventTypes.POINTERUP);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerMove), BABYLON.PointerEventTypes.POINTERMOVE);
+        this._scene.onKeyboardObservable.add(this.whenEnabled(this.onKeyDown), BABYLON.KeyboardEventTypes.KEYDOWN);
+        this._scene.onKeyboardObservable.add(this.whenEnabled(this.onKeyUp), BABYLON.KeyboardEventTypes.KEYUP);
     }
     createUnit() {
         let cell = this.getCellUnderCursor();
@@ -3399,11 +3425,8 @@ export class HexMapEditor {
         }
     }
     getCellUnderCursor() {
-        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
-        if (!pickResult.hit || !(pickResult.pickedMesh instanceof HexMesh)) {
-            return null;
-        }
-        return this.grid.getCell(pickResult.pickedPoint);
+        let ray = this._scene.createPickingRay(this._scene.pointerX, this._scene.pointerY, BABYLON.Matrix.Identity(), this._scene.activeCamera);
+        return this.grid.getCellByRay(ray);
     }
     handleInput() {
         if (HexMapEditor.POINTER_BLOCKED_BY_GUI) {
@@ -3418,33 +3441,20 @@ export class HexMapEditor {
             else {
                 this.isDrag = false;
             }
-            if (this._editMode) {
-                this.editCells(currentCell);
-            }
-            else if (this.isLeftShiftDown && this._searchToCell !== currentCell) {
-                if (this._searchFromCell !== currentCell) {
-                    if (this._searchFromCell) {
-                        this._searchFromCell.disableHighlight();
-                    }
-                    this._searchFromCell = currentCell;
-                    this._searchFromCell.enableHighlight('blue');
-                    if (this._searchToCell) {
-                        this.grid.findPath(this._searchFromCell, this._searchToCell, 24);
-                    }
-                }
-            }
-            else if (this._searchFromCell && this._searchFromCell !== currentCell) {
-                if (this._searchToCell !== currentCell) {
-                    this._searchToCell = currentCell;
-                    this.grid.findPath(this._searchFromCell, this._searchToCell, 24);
-                }
-            }
+            this.editCells(currentCell);
             this.previousCell = currentCell;
         }
         else {
             this.previousCell = null;
         }
         return true;
+    }
+    whenEnabled(f) {
+        return ((a, b) => {
+            if (this._enabled) {
+                f.call(this, a, b);
+            }
+        }).bind(this);
     }
     onPointerDown(eventData, eventState) {
         if (eventData.event.which !== 1) {
@@ -3616,9 +3626,8 @@ export class HexMapEditor {
     toggleGrid(_state) {
         Prefabs.toggleTerrainGrid();
     }
-    toggleEdit(state) {
-        this._editMode = state;
-        this.grid.showUI(!state);
+    setEditMode(toggle) {
+        this._enabled = toggle;
     }
     save() {
         let saveLink = this._editTool.container.querySelector('#download-link');
@@ -3671,16 +3680,81 @@ export class HexMapEditor {
 }
 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;
 export class HexGUI {
-    constructor(gameState, net) {
+    constructor(grid, gameState, net) {
+        this._enabled = true;
+        this._grid = grid;
         this._gameState = gameState;
         this._net = net;
         this.init();
     }
+    setEditMode(toggle) {
+        this._enabled = !toggle;
+        this._grid.showUI(!toggle);
+        this._grid.clearPath();
+    }
+    updateCurrentCell() {
+        let ray = this._grid._scene.createPickingRay(this._grid._scene.pointerX, this._grid._scene.pointerY, BABYLON.Matrix.Identity(), null);
+        let cell = this._grid.getCellByRay(ray);
+        if (cell !== this._currentCell) {
+            this._currentCell = cell;
+            return true;
+        }
+        return false;
+    }
+    doSelection() {
+        this._grid.clearPath();
+        this.updateCurrentCell();
+        if (this._currentCell) {
+            this._selectedUnit = this._currentCell.unit;
+        }
+    }
+    doPathfinding() {
+        if (this.updateCurrentCell()) {
+            if (this._currentCell && this._selectedUnit.isValidDestination(this._currentCell)) {
+                this._grid.findPath(this._selectedUnit.location, this._currentCell, 24);
+            }
+            else {
+                this._grid.clearPath();
+            }
+        }
+    }
+    doMove() {
+        if (this._grid.hasPath) {
+            this._selectedUnit.location = this._currentCell;
+            this._grid.clearPath();
+        }
+    }
+    // Initialization & updates.
     init() {
         this.initNextTurnButton();
         this.initTurnCounter();
         this.initTurnPlayerLabel();
         this._gameState.registerObserver('HexGUI', this.onGameStateChanged.bind(this));
+        this._grid._scene.onPointerObservable.add(this.whenEnabled(this.onPointerDown), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._grid._scene.onPointerObservable.add(this.whenEnabled(this.onPointerMove), BABYLON.PointerEventTypes.POINTERMOVE);
+    }
+    whenEnabled(f) {
+        return ((a, b) => {
+            if (this._enabled) {
+                f.call(this, a, b);
+            }
+        }).bind(this);
+    }
+    onPointerDown(info, state) {
+        if (info.event.which === 1) {
+            this.doSelection();
+        }
+        else if (info.event.which === 3) {
+            if (this._selectedUnit) {
+                this.doMove();
+            }
+        }
+    }
+    onPointerMove(info, state) {
+        if (!this._selectedUnit) {
+            return;
+        }
+        this.doPathfinding();
     }
     initNextTurnButton() {
         this._nextTurnBtn = document.querySelector('.turn-btn button');
