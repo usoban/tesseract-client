@@ -12,9 +12,12 @@
     <!-- Link to pep.js to ensure pointer events work consistently in all browsers -->
     <script src="https://code.jquery.com/pep/0.4.1/pep.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/seedrandom/3.0.1/seedrandom.min.js"></script>
-    <script src="hex_camera.js"></script>
-    <script src="hex.js"></script>
-    <script src="game.js"></script>
+    <script src="hex_camera.js" type="module"></script>
+    <script src="hex.js" type="module"></script>
+    <script src="commands.js" type="module"></script>
+    <script src="phoenix.js" type="module"></script>
+    <script src="game.js" type="module"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
     <style>
         html, body {
             overflow: hidden;
@@ -94,6 +97,67 @@
             background-color: green;
             height: 1em;
         }
+
+        .gui-top {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            height: 20px;
+            position: fixed;
+            top: 0;
+            background-color: blanchedalmond;
+            border-bottom: 5px solid black;
+            font-family: 'Exo 2', sans-serif;
+        }
+        
+        .gui-bottom {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            height: 150px;
+            position: fixed;
+            bottom: 0;
+            background-color: blanchedalmond;
+            border-top: 5px solid black;
+            font-family: 'Exo 2', sans-serif;
+        }
+        .gui-bottom .gui-side-controls {
+            width: 10%;
+            max-width: 100px;
+            border-right: 5px solid black;
+        }
+        .gui-bottom .turn-btn {
+            float: right;
+            width: 150px;
+            height: 100%;
+            vertical-align: middle;
+            border-left: 5px solid black;
+            display: flex;
+        }
+        .gui-bottom .turn-btn button.play {
+            width: 100%;
+            background: url('assets/gfx/play.png') no-repeat;
+            background-position: 0 0;
+            background-size: 100% 100%;
+        }
+        .gui-bottom .turn-btn button.waiting {
+            width: 100%;
+            background: url('assets/gfx/pause.png') no-repeat;
+            background-position: 0 0;
+            background-size: 100% 100%;
+        }
+        .gui-bottom .turn-btn button.join {
+            width: 100%;
+            background: url('assets/gfx/approve.png') no-repeat;
+            background-position: 0 0;
+            background-size: 100% 100%;
+        }
+        .gui-bottom .turn-btn button.connecting {
+            width: 100%;
+            background: url('assets/gfx/gears.png') no-repeat;
+            background-position: 0 0;
+            background-size: 100% 100%;
+        }
     </style>
 </head>
 <body>
@@ -113,10 +177,28 @@
         <div class="guiTag guiClickableTag"></div>
     </div>
 
-    <script type="text/javascript">
+    <div class="gui-top">
+        <div class="turn-counter">Turn: <span class="turn-counter-value">-1</span></div>
+        <div class="turn-player">Active player: <span class="turn-player-label">/</span></div>
+    </div>
+    <div class="gui-bottom">
+        <div class="gui-side-controls">
+            side
+        </div>
+        <div class="gui-info-panel">
+            info
+        </div>
+        <div class="turn-btn">
+            <button class="waiting"></button>
+        </div>
+    </div>
+
+    <script type="module">
+        import {Game} from "./game.js";
+
         window.addEventListener('DOMContentLoaded', () => {
             // Create the game using the 'renderCanvas'.
-            let game = new Game('renderCanvas');
+            let game = new Game.Client('renderCanvas');
             // Create the scene.
             game.createScene();
             // Start render loop.

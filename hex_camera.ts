@@ -1,6 +1,6 @@
 ///<reference path="babylon.d.ts" />
 
-class HexGridFreeCameraMouseInput extends BABYLON.FreeCameraMouseInput {
+export class HexGridFreeCameraMouseInput extends BABYLON.FreeCameraMouseInput {
     // /**
     //  * Defines the camera the input is attached to.
     //  */
@@ -355,18 +355,18 @@ class HexCamera extends BABYLON.Camera {
         this.stick.position = new BABYLON.Vector3(0.0, 0.0, distance);
 
         if (this.parent) {
-            this.parent.getWorldMatrix().invertToRef(BABYLON.Tmp.Matrix[0]);
+            this.parent.getWorldMatrix().invertToRef(BABYLON.TmpVectors.Matrix[0]);
 
             BABYLON.Vector3.TransformNormalToRef(
                 this.stick.position, 
-                BABYLON.Tmp.Matrix[0], 
-                BABYLON.Tmp.Vector3[0]
+                BABYLON.TmpVectors.Matrix[0], 
+                BABYLON.TmpVectors.Vector3[0]
             );
 
-            this.position.addInPlace(BABYLON.Tmp.Vector3[0]);
+            this.position.addInPlace(BABYLON.TmpVectors.Vector3[0]);
             console.log(this.position.toString());
 
-            this.position.addInPlace(BABYLON.Tmp.Vector3[0]);
+            this.position.addInPlace(BABYLON.TmpVectors.Vector3[0]);
             // this.
             return;
         }

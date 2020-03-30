@@ -2,6 +2,9 @@
 ///<reference path="babylon.gui.d.ts" />
 ///<reference path="babylonjs.materials.module.d.ts" />
 
+import { Game } from "./game";
+import { Commands } from "./commands.js";
+
 type Nullable<T> = T | null;
 
 class ArrayBufferUtil {
@@ -208,6 +211,19 @@ class Filesys {
 
     public static resizeArrayBuffer(buffer: ArrayBuffer) {
         return ArrayBufferUtil.transfer(buffer, buffer.byteLength*2);
+    }
+}
+
+class Bezier {
+    public static getPoint(a: BABYLON.Vector3, b: BABYLON.Vector3, c: BABYLON.Vector3, t: number): BABYLON.Vector3 {
+        let r  = 1.0 - t;
+        // r * r * a + 2f * r * t * b + t * t * c;
+        return a.scale(r * r).add(b.scale(2.0 * r * t)).add(c.scale(t * t));
+    }
+
+    public static getDerivative(a: BABYLON.Vector3, b: BABYLON.Vector3, c: BABYLON.Vector3, t: number): BABYLON.Vector3 {
+        // 2f * ((1f - t) * (b - a) + t * (c - b));
+        return b.subtract(a).scale(1.0 - t).add(c.subtract(b).scale(t)).scale(2.0);
     }
 }
 
@@ -527,7 +543,7 @@ enum HexEdgeType {
     Flat, Slope, Cliff
 }
 
-class HexCoordinates {
+export class HexCoordinates {
     public x: number;
     public z: number;
     private _y: number;
@@ -539,6 +555,14 @@ class HexCoordinates {
 
     get y(): number {
         return -this.x - this.z;
+    }
+
+    public distanceTo(other: HexCoordinates): number {
+        return (
+            Math.abs(this.x - other.x) +
+            Math.abs(this.y - other.y) +
+            Math.abs(this.z - other.z)
+        ) / 2;
     }
 
     public static fromOffsetCoordinates(x: number, z: number): HexCoordinates {
@@ -575,6 +599,15 @@ class HexCoordinates {
     public toString() {
         return `(${this.x}, ${this.y}, ${this.z})`;
     }
+
+    public save(writer: ByteBuffer): void {
+        writer.writeUint8(this.x);
+        writer.writeUint8(this.z);
+    }
+
+    public static load(reader: ByteBuffer): HexCoordinates {
+        return new HexCoordinates(reader.readUint8(), reader.readUint8());
+    }
 }
 
 class HexHash {
@@ -602,23 +635,26 @@ class Prefabs {
     private static GRID_STATUS: boolean = false;
 
     private static _terrainMaterial: BABYLON.ShaderMaterial;
-    private static _riverMaterial: BABYLON.PBRCustomMaterial;
-    private static _roadMaterial: BABYLON.PBRCustomMaterial;
-    private static _waterMaterial: BABYLON.PBRCustomMaterial;
-    private static _waterShoreMaterial: BABYLON.PBRCustomMaterial;
-    private static _estuariesMaterial: BABYLON.PBRCustomMaterial;
+    private static _riverMaterial: BABYLON.ShaderMaterial;
+    private static _roadMaterial: BABYLON.ShaderMaterial;
+    private static _waterMaterial: BABYLON.CustomMaterial;
+    private static _waterShoreMaterial: BABYLON.CustomMaterial;
+    private static _estuariesMaterial: BABYLON.ShaderMaterial;
     private static _urbanFeatureMaterial: BABYLON.StandardMaterial;
     private static _farmFeatureMaterial: BABYLON.StandardMaterial;
     private static _plantFeatureMaterial: BABYLON.StandardMaterial;
-    private static _wallsMaterial: BABYLON.PBRMaterial;
-    private static _towerMaterial: BABYLON.PBRMaterial;
-    private static _bridgeMaterial: BABYLON.PBRMaterial;
+    private static _wallsMaterial: BABYLON.StandardMaterial;
+    private static _towerMaterial: BABYLON.StandardMaterial;
+    private static _bridgeMaterial: BABYLON.StandardMaterial;
+    private static _cellOutlineMaterials: Map<String, BABYLON.StandardMaterial>;
+    private static _unitMaterial: BABYLON.StandardMaterial;
     private static _sandTexture: BABYLON.Texture;
     private static _stoneTexture: BABYLON.Texture;
     private static _snowTexture: BABYLON.Texture;
     private static _mudTexture: BABYLON.Texture;
     private static _grassTexture: BABYLON.Texture;
     private static _gridTexture: BABYLON.Texture;
+    private static _cellOutlineTexture: BABYLON.Texture;
 
     private static _foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
@@ -702,6 +738,7 @@ class Prefabs {
         Prefabs._mudTexture = makeTexture('./assets/gfx/material/mud.png');
         Prefabs._grassTexture = makeTexture('./assets/gfx/material/grass.png');
         Prefabs._gridTexture = makeTexture('./assets/gfx/material/grid.png');
+        Prefabs._cellOutlineTexture = makeTexture('./assets/gfx/material/cell-outline.png');
 
         return Promise.all([
             makePromise(Prefabs._gridTexture),
@@ -709,7 +746,8 @@ class Prefabs {
             makePromise(Prefabs._stoneTexture),
             makePromise(Prefabs._snowTexture),
             makePromise(Prefabs._mudTexture),
-            makePromise(Prefabs._grassTexture)
+            makePromise(Prefabs._grassTexture),
+            makePromise(Prefabs._cellOutlineTexture)
         ]);
     }
 
@@ -733,7 +771,7 @@ class Prefabs {
 
     private static terrainMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._terrainMaterial) {
-            BABYLON.Effect.ShadersStore["customVertexShader"] = `
+            BABYLON.Effect.ShadersStore['customVertexShader'] = `
                 precision highp float;
                 
                 attribute vec3 position;
@@ -758,7 +796,7 @@ class Prefabs {
                 }
             `;
 
-            BABYLON.Effect.ShadersStore["customPixelShader"] = `
+            BABYLON.Effect.ShadersStore['customPixelShader'] = `
                 precision highp float;
                 
                 uniform sampler2D textures[5];
@@ -775,7 +813,7 @@ class Prefabs {
                     //
                     // We need to sample all textures otherwise the results are incorrect 
                     // on some hardware (e.g., on AMD RX580 it did not work, but on Intel HD it did).
-                    // Not sure if this is exactly it, but the workaround was inspired by "non-uniform flow control":
+                    // Not sure if this is exactly it, but the workaround was inspired by 'non-uniform flow control':
                     // https://www.khronos.org/opengl/wiki/Sampler_(GLSL)#Non-uniform_flow_control
 
                     vec4 s0 = texture2D(texturesArray[0], uv);
@@ -833,23 +871,23 @@ class Prefabs {
             `;
 
             Prefabs._terrainMaterial = new BABYLON.ShaderMaterial(
-                "customPixelShader", 
+                'customPixelShader', 
                 scene,
                 {
-                    vertex: "custom",
-                    fragment: "custom"
+                    vertex: 'custom',
+                    fragment: 'custom'
                 },
                 {
-                    attributes: ["position", "color", "uv", "terrainType"],
-                    uniforms: ["worldViewProjection"],
-                    samplers: ["textures", "grid"],
+                    attributes: ['position', 'color', 'uv', 'terrainType'],
+                    uniforms: ['worldViewProjection'],
+                    samplers: ['textures', 'grid'],
                     defines: Prefabs.GRID_STATUS ? [Prefabs.GRID_ON] : []
                 }
             );
 
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
 
-            Prefabs._terrainMaterial.setTextureArray("textures", [
+            Prefabs._terrainMaterial.setTextureArray('textures', [
                 Prefabs._sandTexture,
                 Prefabs._grassTexture,
                 Prefabs._mudTexture,
@@ -857,7 +895,7 @@ class Prefabs {
                 Prefabs._snowTexture
             ]);
 
-            Prefabs._terrainMaterial.setTexture("grid", Prefabs._gridTexture);
+            Prefabs._terrainMaterial.setTexture('grid', Prefabs._gridTexture);
         }
 
         return Prefabs._terrainMaterial;
@@ -865,131 +903,213 @@ class Prefabs {
 
     private static riverMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._riverMaterial) {
-            Prefabs._riverMaterial = new BABYLON.PBRCustomMaterial("river_material", scene);
-            Prefabs._riverMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._riverMaterial.emissiveColor = BABYLON.Color3.FromHexString("#68AEEB");
-            Prefabs._riverMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._riverMaterial.metallic = 0;
-            Prefabs._riverMaterial.roughness = 0.5;
-            Prefabs._riverMaterial.alpha = 0;
-            Prefabs._riverMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._riverMaterial.transparencyMode = 2; 
+            BABYLON.Effect.ShadersStore['riverVertexShader'] = `
+                precision highp float;
+                
+                attribute vec3 position;
+                attribute vec2 uv;
+                attribute vec3 terrainType;
+                attribute vec4 color;
+                
+                uniform mat4 worldViewProjection;
 
-            Prefabs._riverMaterial.albedoTexture = new BABYLON.Texture(
+                varying vec2 vUV;
+                varying vec4 vColor;
+
+                void main(void) {
+                
+                    gl_Position = worldViewProjection * vec4(position, 1.0);
+    
+                    vUV = uv;
+                    vColor = color;
+                }
+            `;
+
+            BABYLON.Effect.ShadersStore['riverPixelShader'] = `
+                precision highp float;
+                
+                uniform sampler2D noise;
+                uniform vec3 time;
+                uniform vec4 emissiveColor;
+                
+                varying vec2 vUV;
+            
+                ${this._riverShaderFn}
+
+                void main(void)
+                {
+                    float river = River(vUV, noise, time.y);
+                    vec4 c = clamp(emissiveColor + river, 0.0, 1.0);
+
+                    gl_FragColor = c;
+                }
+            `;
+
+            Prefabs._riverMaterial = new BABYLON.ShaderMaterial(
+                'riverShader', 
+                scene,
+                {
+                    vertex: 'river',
+                    fragment: 'river'
+                },
+                {
+                    attributes: ['position', 'color', 'uv'],
+                    uniforms: ['worldViewProjection', 'time', 'emissiveColor'],
+                    samplers: ['noise'],
+                    defines: []
+                }
+            );
+
+            let txt = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
                 scene,
                 true,
                 false,
                 BABYLON.Texture.BILINEAR_SAMPLINGMODE
             );
-            Prefabs._riverMaterial.albedoTexture.hasAlpha = true;
+            txt.hasAlpha = true;
 
-            let t = 0;
-            Prefabs._riverMaterial.AddUniform("time", "vec3", null);
+            Prefabs._riverMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._riverMaterial.setTexture('noise', txt);
+            Prefabs._riverMaterial.setColor4('emissiveColor', BABYLON.Color4.FromHexString('#8FB3FF11'));
+            Prefabs._riverMaterial.alpha = 0.9;
+            Prefabs._riverMaterial.setVector3('time', BABYLON.Vector3.Zero());
+
+            let t = 0;            
             Prefabs._riverMaterial.onBindObservable.add(() => {
                 if (Prefabs._riverMaterial && Prefabs._riverMaterial.getEffect && Prefabs._riverMaterial.getEffect()) {
                     t++;
-
                     Prefabs._riverMaterial.getEffect().setVector3(
-                        "time", 
+                        'time', 
                         new BABYLON.Vector3(1.0, t/HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0)
                     );
                 }
             });
-
-            Prefabs._riverMaterial.Fragment_Definitions(`${Prefabs._riverShaderFn}`);
-            
-            Prefabs._riverMaterial.Fragment_Custom_Albedo(`
-                float river = River(vAlbedoUV, albedoSampler, time.y);
-                vec4 c = clamp(vAlbedoColor + river, 0.0, 1.0);
-
-                surfaceAlbedo.rgb = c.rgb;
-                alpha = c.a;
-            `);
         }
-        
+
         return Prefabs._riverMaterial;
     }
 
     private static roadMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._roadMaterial) {
-            Prefabs._roadMaterial = new BABYLON.PBRCustomMaterial("road_material", scene);
-            Prefabs._roadMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._roadMaterial.emissiveColor = BABYLON.Color3.FromHexString("#000000");
-            Prefabs._roadMaterial.albedoColor = BABYLON.Color3.FromHexString("#CC302F");
-            Prefabs._roadMaterial.metallic = 0;
-            Prefabs._roadMaterial.roughness = 0.5;
-            Prefabs._roadMaterial.needDepthPrePass = true;
-            
-            Prefabs._roadMaterial.alpha = 0.9;
-            Prefabs._roadMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._roadMaterial.transparencyMode = 2; 
-            Prefabs._roadMaterial.zOffset = -1.0;
+            BABYLON.Effect.ShadersStore['roadVertexShader'] = `
+                precision highp float;
+                
+                attribute vec3 position;
+                attribute vec2 uv;
+                attribute vec3 terrainType;
+                attribute vec4 color;
+                
+                uniform mat4 worldViewProjection;
 
-            Prefabs._roadMaterial.albedoTexture = new BABYLON.Texture(
+                varying vec2 vUV;
+                varying vec3 vPositionW;
+
+                void main(void) {
+                
+                    gl_Position = worldViewProjection * vec4(position, 1.0);
+    
+                    vUV = uv;
+                    vPositionW = position;
+                }
+            `;
+
+            BABYLON.Effect.ShadersStore['roadPixelShader'] = `
+                precision highp float;
+                
+                uniform sampler2D noiseSampler;
+                uniform vec3 time;
+                uniform vec4 emissiveColor;
+                
+                varying vec2 vUV;
+                varying vec3 vPositionW;
+
+                ${this._riverShaderFn}
+
+                void main(void)
+                {
+                    vec4 noise = texture2D(noiseSampler, vPositionW.xz * 0.025);
+                    vec4 c = emissiveColor * (noise.y * 0.75 + 0.25);
+                    float blend = vUV.x;
+    
+                    blend *= noise.x + 0.5;
+                    blend = smoothstep(0.4, 0.7, blend);
+    
+                    gl_FragColor = vec4(c.rgb, blend);
+                }
+            `;
+
+            Prefabs._roadMaterial = new BABYLON.ShaderMaterial(
+                'roadShader', 
+                scene,
+                {
+                    vertex: 'road',
+                    fragment: 'road'
+                },
+                {
+                    attributes: ['position', 'color', 'uv'],
+                    uniforms: ['worldViewProjection', 'emissiveColor'],
+                    samplers: ['noiseSampler'],
+                    defines: []
+                }
+            );
+
+            let txt = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
                 scene,
                 true,
                 false,
                 BABYLON.Texture.BILINEAR_SAMPLINGMODE
             );
-            Prefabs._roadMaterial.albedoTexture.hasAlpha = true;
+            txt.hasAlpha = true;
 
-            Prefabs._roadMaterial.Fragment_Custom_Albedo(`
-                vec4 noise = texture2D(albedoSampler, vPositionW.xz * 0.025);
-                vec4 c = vAlbedoColor * (noise.y * 0.75 + 0.25);
-                float blend = vAlbedoUV.x;
-
-                blend *= noise.x + 0.5;
-                blend = smoothstep(0.4, 0.7, blend);
-
-                surfaceAlbedo = c.rgb;
-                alpha = blend;
-            `);
+            Prefabs._roadMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._roadMaterial.setTexture('noiseSampler', txt);
+            Prefabs._roadMaterial.setColor4('emissiveColor', BABYLON.Color4.FromHexString('#CC302F11'));
+            Prefabs._roadMaterial.alpha = 0.9;
+            Prefabs._roadMaterial.needDepthPrePass = true;
+            Prefabs._roadMaterial.zOffset = -1.0;
         }
-        
+
         return Prefabs._roadMaterial;
     }
 
     private static waterMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._waterMaterial) {
-            Prefabs._waterMaterial = new BABYLON.PBRCustomMaterial("water_material", scene);
+            Prefabs._waterMaterial = new BABYLON.CustomMaterial('water_material', scene);
             Prefabs._waterMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._waterMaterial.emissiveColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._waterMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._waterMaterial.metallic = 0;
-            Prefabs._waterMaterial.roughness = 0.5;
-            Prefabs._waterMaterial.alpha = 0.9;
-            Prefabs._waterMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._waterMaterial.transparencyMode = 2;
+            Prefabs._waterMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._waterMaterial.specularColor = BABYLON.Color3.Black();
+            Prefabs._waterMaterial.diffuseColor = BABYLON.Color3.FromHexString('#8FB3FF');
+            Prefabs._waterMaterial.alpha = 0.85;
 
-            Prefabs._waterMaterial.albedoTexture = new BABYLON.Texture(
+            Prefabs._waterMaterial.diffuseTexture = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
                 scene,
                 true,
                 false,
                 BABYLON.Texture.BILINEAR_SAMPLINGMODE
             );
-            Prefabs._waterMaterial.albedoTexture.hasAlpha = true;
+            Prefabs._waterMaterial.diffuseTexture.hasAlpha = true;
 
             let t = 0;
-            Prefabs._waterMaterial.AddUniform("vTime", "vec3", null);
+            Prefabs._waterMaterial.AddUniform('vTime', 'vec3', null);
             Prefabs._waterMaterial.onBindObservable.add(() => {
                 if (Prefabs._waterMaterial && Prefabs._waterMaterial.getEffect && Prefabs._waterMaterial.getEffect()) {
                     t++;
-                    Prefabs._waterMaterial.getEffect().setVector3("vTime", new BABYLON.Vector3(0.0, t/180.0, 0.0));
+                    Prefabs._waterMaterial.getEffect().setVector3('vTime', new BABYLON.Vector3(0.0, t/180.0, 0.0));
                 }
             });
 
             Prefabs._waterMaterial.Fragment_Definitions(Prefabs._wavesShaderFn);
 
-            Prefabs._waterMaterial.Fragment_Custom_Albedo(`
-                vec4 _color = vec4(vEmissiveColor, 0.0);
-                float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
+            Prefabs._waterMaterial.Fragment_Custom_Diffuse(`
+                vec4 _color = vec4(vDiffuseColor.rgb, 0.0);
+                float waves = Waves(vPositionW.xz, diffuseSampler, vTime.y);
                 vec4 c = clamp(_color + waves, 0.0, 1.0);
 
-                surfaceAlbedo.rgb = c.rgb;
-                alpha = c.a;
+                result.rgb = c.rgb;
+                //alpha = c.a;
             `);
         }
         
@@ -998,31 +1118,29 @@ class Prefabs {
 
     private static waterShoreMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._waterShoreMaterial) {
-            Prefabs._waterShoreMaterial = new BABYLON.PBRCustomMaterial("water_shore_material", scene);
+            Prefabs._waterShoreMaterial = new BABYLON.CustomMaterial('water_shore_material', scene);
             Prefabs._waterShoreMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._waterShoreMaterial.emissiveColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._waterShoreMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._waterShoreMaterial.metallic = 0;
-            Prefabs._waterShoreMaterial.roughness = 0.5;
-            Prefabs._waterShoreMaterial.alpha = 0.9;
+            Prefabs._waterShoreMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._waterMaterial.specularColor = BABYLON.Color3.Black();
+            Prefabs._waterShoreMaterial.diffuseColor = BABYLON.Color3.FromHexString('#8FB3FF');
+            Prefabs._waterShoreMaterial.alpha = 0.85;
             Prefabs._waterShoreMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._waterShoreMaterial.transparencyMode = 2; 
 
-            Prefabs._waterShoreMaterial.albedoTexture = new BABYLON.Texture(
+            Prefabs._waterShoreMaterial.diffuseTexture = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
                 scene,
                 true,
                 false,
                 BABYLON.Texture.BILINEAR_SAMPLINGMODE
             );
-            Prefabs._waterShoreMaterial.albedoTexture.hasAlpha = true;
+            Prefabs._waterShoreMaterial.diffuseTexture.hasAlpha = true;
 
             let t = 0;
-            Prefabs._waterShoreMaterial.AddUniform("vTime", "vec3", null);
+            Prefabs._waterShoreMaterial.AddUniform('vTime', 'vec3', null);
             Prefabs._waterShoreMaterial.onBindObservable.add(() => {
                 if (Prefabs._waterShoreMaterial && Prefabs._waterShoreMaterial.getEffect && Prefabs._waterShoreMaterial.getEffect()) {
                     t++;
-                    Prefabs._waterShoreMaterial.getEffect().setVector3("vTime", new BABYLON.Vector3(0.0, t/180.0, 0.0));
+                    Prefabs._waterShoreMaterial.getEffect().setVector3('vTime', new BABYLON.Vector3(0.0, t/180.0, 0.0));
                 }
             });
 
@@ -1032,17 +1150,17 @@ class Prefabs {
                 ${Prefabs._wavesShaderFn}
             `);
 
-            Prefabs._waterShoreMaterial.Fragment_Custom_Albedo(`
-                vec4 _color = vec4(vEmissiveColor, 0.0);
-                float shore = vAlbedoUV.y;
-                float foam = Foam(shore, vPositionW.xz, albedoSampler, vTime.y);
-                float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
+            Prefabs._waterShoreMaterial.Fragment_Custom_Diffuse(`
+                vec4 _color = vec4(vDiffuseColor.rgb, 0.0);
+                float shore = vDiffuseUV.y;
+                float foam = Foam(shore, vPositionW.xz, diffuseSampler, vTime.y);
+                float waves = Waves(vPositionW.xz, diffuseSampler, vTime.y);
                 waves *= 1.0 - shore;
 
                 vec4 c = clamp(_color + max(foam, waves), 0.0, 1.0);
 
-                surfaceAlbedo.rgb = c.rgb;
-                alpha = c.a;
+                result.rgb = c.rgb;
+                //alpha = c.a;
             `);
         }
         
@@ -1051,76 +1169,117 @@ class Prefabs {
 
     private static estuariesMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._estuariesMaterial) {
-            Prefabs._estuariesMaterial = new BABYLON.PBRCustomMaterial("estuaries_material", scene);
-            Prefabs._estuariesMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._estuariesMaterial.emissiveColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._estuariesMaterial.albedoColor = BABYLON.Color3.FromHexString("#ffffff");
-            Prefabs._estuariesMaterial.metallic = 0;
-            Prefabs._estuariesMaterial.roughness = 0.5;
-            Prefabs._estuariesMaterial.alpha = 0.9;
-            Prefabs._estuariesMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._estuariesMaterial.transparencyMode = 2; 
+            BABYLON.Effect.ShadersStore['estuariesVertexShader'] = `
+                precision highp float;
+                
+                attribute vec3 position;
+                attribute vec2 uv;
+                attribute vec2 uv2;
+                attribute vec3 terrainType;
+                attribute vec4 color;
+                
+                uniform mat4 worldViewProjection;
 
-            Prefabs._estuariesMaterial.albedoTexture = new BABYLON.Texture(
+                varying vec2 vUV;
+                varying vec4 vColor;
+                varying vec3 vPositionW;
+
+                out vec2 vUV2;
+
+                void main(void) {
+                
+                    gl_Position = worldViewProjection * vec4(position, 1.0);
+    
+                    vUV = uv;
+                    vColor = color;
+                    vUV2 = uv2;
+                    vPositionW = position;
+                }
+            `;
+
+            BABYLON.Effect.ShadersStore['estuariesPixelShader'] = `
+                precision highp float;
+                
+                uniform sampler2D noise;
+                uniform vec3 time;
+                uniform vec4 emissiveColor;
+                
+                varying vec2 vUV;
+                varying vec3 vPositionW;
+                in vec2 vUV2;
+                
+                ${this._foamShaderFn}
+                ${this._wavesShaderFn}
+                ${this._riverShaderFn}
+
+                void main(void)
+                {
+                    vec4 _color = vec4(emissiveColor.rgb, 0.0);
+                    float shore = vUV.y;
+                    float foam = Foam(shore, vPositionW.xz, noise, time.y);
+                    float waves = Waves(vPositionW.xz, noise, time.y);
+                    waves *= 1.0 - shore;
+
+                    float shoreWater = max(foam, waves);
+                    float river = River(vUV2, noise, time.y);
+                    float water = mix(shoreWater, river, vUV.x);
+                    vec4 c = clamp(_color + water, 0.0, 1.0);
+
+                    gl_FragColor = c;
+                }
+            `;
+
+            Prefabs._estuariesMaterial = new BABYLON.ShaderMaterial(
+                'estuariesShader', 
+                scene,
+                {
+                    vertex: 'estuaries',
+                    fragment: 'estuaries'
+                },
+                {
+                    attributes: ['position', 'color', 'uv', 'uv2'],
+                    uniforms: ['worldViewProjection', 'time', 'emissiveColor'],
+                    samplers: ['noise'],
+                    defines: []
+                }
+            );
+
+            let txt = new BABYLON.Texture(
                 './assets/gfx/material/noise.png',
                 scene,
                 true,
                 false,
                 BABYLON.Texture.BILINEAR_SAMPLINGMODE
             );
-            Prefabs._estuariesMaterial.albedoTexture.coordinatesIndex = 1;
-            Prefabs._estuariesMaterial.albedoTexture.hasAlpha = true;
 
-            let t = 0;
-            Prefabs._estuariesMaterial.AddUniform("vTime", "vec3", null);
+            txt.coordinatesIndex = 1;
+            txt.hasAlpha = true;
+
+            Prefabs._estuariesMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._estuariesMaterial.setTexture('noise', txt);
+            Prefabs._estuariesMaterial.setColor4('emissiveColor', BABYLON.Color4.FromHexString('#8FB3FF11'));
+            Prefabs._estuariesMaterial.setVector3('time', BABYLON.Vector3.Zero());
+            Prefabs._estuariesMaterial.alpha = 0.9;
+
+            let t = 0;            
             Prefabs._estuariesMaterial.onBindObservable.add(() => {
                 if (Prefabs._estuariesMaterial && Prefabs._estuariesMaterial.getEffect && Prefabs._estuariesMaterial.getEffect()) {
                     t++;
-                    Prefabs._estuariesMaterial.getEffect().setVector3("vTime", new BABYLON.Vector3(0.0, t/180.0, 0.0));
+                    Prefabs._estuariesMaterial.getEffect().setVector3(
+                        'time', 
+                        new BABYLON.Vector3(1.0, t/HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0)
+                    );
                 }
             });
-
-            Prefabs._estuariesMaterial.Vertex_Definitions(`
-                out vec2 vAlbedoUV2;
-            `);
-            Prefabs._estuariesMaterial.Vertex_MainEnd(`
-                vAlbedoUV2 = uv2;
-            `);
-            
-            Prefabs._estuariesMaterial.Fragment_Definitions(`
-                in vec2 vAlbedoUV2;
-
-                ${Prefabs._foamShaderFn}
-                
-                ${Prefabs._wavesShaderFn}
-
-                ${Prefabs._riverShaderFn}
-            `);
-
-            Prefabs._estuariesMaterial.Fragment_Custom_Albedo(`
-                vec4 _color = vec4(vEmissiveColor, 0.0);
-                float shore = vAlbedoUV.y;
-                float foam = Foam(shore, vPositionW.xz, albedoSampler, vTime.y);
-                float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
-                waves *= 1.0 - shore;
-
-                float shoreWater = max(foam, waves);
-                float river = River(vAlbedoUV2, albedoSampler, vTime.y);
-                float water = mix(shoreWater, river, vAlbedoUV.x);
-                vec4 c = clamp(_color + water, 0.0, 1.0);
-
-                surfaceAlbedo.rgb = c.rgb;
-                alpha = c.a;
-            `);
         }
-        
+
         return Prefabs._estuariesMaterial;
     }
 
     private static urbanFeatureMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._urbanFeatureMaterial) {
-            Prefabs._urbanFeatureMaterial = new BABYLON.StandardMaterial("urban_material", scene);
-            Prefabs._urbanFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#c8272e");
+            Prefabs._urbanFeatureMaterial = new BABYLON.StandardMaterial('urban_material', scene);
+            Prefabs._urbanFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString('#c8272e');
             Prefabs._urbanFeatureMaterial.emissiveColor = BABYLON.Color3.Black();
             Prefabs._urbanFeatureMaterial.specularColor = BABYLON.Color3.Black();
         }
@@ -1130,8 +1289,8 @@ class Prefabs {
 
     private static farmFeatureMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._farmFeatureMaterial) {
-            Prefabs._farmFeatureMaterial = new BABYLON.StandardMaterial("farm_material", scene);
-            Prefabs._farmFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#15D700");
+            Prefabs._farmFeatureMaterial = new BABYLON.StandardMaterial('farm_material', scene);
+            Prefabs._farmFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString('#15D700');
             Prefabs._farmFeatureMaterial.emissiveColor = BABYLON.Color3.Black();
             Prefabs._farmFeatureMaterial.specularColor = BABYLON.Color3.Black();
         }
@@ -1141,8 +1300,8 @@ class Prefabs {
     
     private static plantFeatureMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._plantFeatureMaterial) {
-            Prefabs._plantFeatureMaterial = new BABYLON.StandardMaterial("plant_material", scene);
-            Prefabs._plantFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString("#2e8923");
+            Prefabs._plantFeatureMaterial = new BABYLON.StandardMaterial('plant_material', scene);
+            Prefabs._plantFeatureMaterial.diffuseColor = BABYLON.Color3.FromHexString('#2e8923');
             Prefabs._plantFeatureMaterial.emissiveColor = BABYLON.Color3.Black();
             Prefabs._plantFeatureMaterial.specularColor = BABYLON.Color3.Black();
         }
@@ -1152,11 +1311,11 @@ class Prefabs {
 
     private static wallsMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._wallsMaterial) {
-            Prefabs._wallsMaterial = new BABYLON.PBRMaterial("walls_material", scene);
-            Prefabs._wallsMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._wallsMaterial = new BABYLON.StandardMaterial('walls_material', scene);
+            Prefabs._wallsMaterial.sideOrientation = BABYLON.Orientation.CW;
             Prefabs._wallsMaterial.emissiveColor = BABYLON.Color3.Black();
-            Prefabs._wallsMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
-            Prefabs._wallsMaterial.metallic = 0;
+            Prefabs._wallsMaterial.diffuseColor = BABYLON.Color3.FromHexString('#c8272e');
+            Prefabs._wallsMaterial.specularColor = BABYLON.Color3.Black();
         }
 
         return Prefabs._wallsMaterial;
@@ -1164,11 +1323,10 @@ class Prefabs {
 
     private static towerMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._towerMaterial) {
-            Prefabs._towerMaterial = new BABYLON.PBRMaterial("tower_material", scene);
-            // Prefabs._towerMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
+            Prefabs._towerMaterial = new BABYLON.StandardMaterial('tower_material', scene);
             Prefabs._towerMaterial.emissiveColor = BABYLON.Color3.Black();
-            Prefabs._towerMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
-            Prefabs._towerMaterial.metallic = 0;
+            Prefabs._towerMaterial.diffuseColor = BABYLON.Color3.FromHexString('#c8272e');
+            Prefabs._wallsMaterial.specularColor = BABYLON.Color3.Black();
         }
 
         return Prefabs._towerMaterial;
@@ -1176,14 +1334,47 @@ class Prefabs {
 
     private static bridgeMaterial(scene: BABYLON.Scene): BABYLON.Material {
         if (!Prefabs._bridgeMaterial) {
-            Prefabs._bridgeMaterial = new BABYLON.PBRMaterial("bridge_material", scene);
-            Prefabs._bridgeMaterial.sideOrientation = BABYLON.Orientation.CCW;
+            Prefabs._bridgeMaterial = new BABYLON.StandardMaterial('bridge_material', scene);
             Prefabs._bridgeMaterial.emissiveColor = BABYLON.Color3.Black();
-            Prefabs._bridgeMaterial.albedoColor = BABYLON.Color3.FromHexString("#c8272e");
-            Prefabs._bridgeMaterial.metallic = 0;
+            Prefabs._bridgeMaterial.diffuseColor = BABYLON.Color3.FromHexString('#c8272e');
+            Prefabs._wallsMaterial.specularColor = BABYLON.Color3.Black();
         }
 
         return Prefabs._bridgeMaterial;
+    }
+
+    public static cellOutlineMaterials(scene: BABYLON.Scene): Map<String, BABYLON.Material> {
+        if (!Prefabs._cellOutlineMaterials) {
+            const make = (name: string, color: BABYLON.Color3) => {
+                let mat = new BABYLON.StandardMaterial(`cell_outline_material_${name}`, scene);
+                mat.diffuseTexture = Prefabs._cellOutlineTexture;
+                mat.diffuseTexture.hasAlpha = true;
+                mat.diffuseTexture.updateSamplingMode(BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+                mat.depthFunction = BABYLON.Engine.ALWAYS;
+                mat.emissiveColor = BABYLON.Color3.Black();
+                mat.diffuseColor = color;
+
+                return mat;
+            };
+
+            Prefabs._cellOutlineMaterials = new Map();
+            Prefabs._cellOutlineMaterials['white'] = make('red', BABYLON.Color3.White());
+            Prefabs._cellOutlineMaterials['red'] = make('red', BABYLON.Color3.Red());
+            Prefabs._cellOutlineMaterials['blue'] = make('blue', BABYLON.Color3.Blue());
+        }
+
+        return Prefabs._cellOutlineMaterials;
+    }
+
+    public static unitMaterial(scene: BABYLON.Scene): BABYLON.StandardMaterial {
+        if (!Prefabs._unitMaterial) {
+            Prefabs._unitMaterial = new BABYLON.StandardMaterial(`unit_material`, scene);
+            Prefabs._unitMaterial.diffuseColor = BABYLON.Color3.Blue();
+            Prefabs._unitMaterial.emissiveColor = BABYLON.Color3.Black();
+            Prefabs._unitMaterial.specularColor = BABYLON.Color3.Black();
+        }
+    
+        return Prefabs._unitMaterial;
     }
 
     public static terrain(name: string, scene: BABYLON.Scene): HexMesh {
@@ -1379,6 +1570,14 @@ class Prefabs {
 
         return castle;
     }
+
+    public static unit(name: string, scene: BABYLON.Scene) {
+        let unitMesh = new HexUnit(`unit_${name}`, scene);
+
+        unitMesh.material = Prefabs.unitMaterial(scene);
+     
+        return unitMesh;
+    }
 }
 
 class XQuaternion {
@@ -1419,13 +1618,13 @@ class XQuaternion {
             // v1 = destination.clone(),
             d: number;
         
-        BABYLON.Tmp.Vector3[0] = vector.clone();
-        BABYLON.Tmp.Vector3[1] = destination.clone();
+        BABYLON.TmpVectors.Vector3[0] = vector.clone();
+        BABYLON.TmpVectors.Vector3[1] = destination.clone();
 
-        BABYLON.Tmp.Vector3[0].normalize();
-        BABYLON.Tmp.Vector3[1].normalize();
+        BABYLON.TmpVectors.Vector3[0].normalize();
+        BABYLON.TmpVectors.Vector3[1].normalize();
 
-        d = BABYLON.Vector3.Dot(BABYLON.Tmp.Vector3[0], BABYLON.Tmp.Vector3[1]);
+        d = BABYLON.Vector3.Dot(BABYLON.TmpVectors.Vector3[0], BABYLON.TmpVectors.Vector3[1]);
         
         if (d >= 1.0) {
             return BABYLON.Quaternion.Identity();
@@ -1450,7 +1649,7 @@ class XQuaternion {
             let
                 s = Math.sqrt((1 + d) * 2),
                 invs = 1/s,
-                c = BABYLON.Vector3.Cross(BABYLON.Tmp.Vector3[0], BABYLON.Tmp.Vector3[1]);
+                c = BABYLON.Vector3.Cross(BABYLON.TmpVectors.Vector3[0], BABYLON.TmpVectors.Vector3[1]);
 
             q.x = c.x * invs;
             q.y = c.y * invs;
@@ -1461,6 +1660,27 @@ class XQuaternion {
         }
 
         return q;
+    }
+
+     /** Returns a new Quaternion set from the passed vector position. */
+    public static LookRotation(position:BABYLON.Vector3):BABYLON.Quaternion {
+        let result: BABYLON.Quaternion = BABYLON.Quaternion.Zero();
+        XQuaternion.LookRotationToRef(position, result);
+        return result;
+    }
+
+    /** Returns a new Quaternion set from the passed vector position. */
+    public static LookRotationToRef(position:BABYLON.Vector3, result:BABYLON.Quaternion):void {
+        BABYLON.TmpVectors.Matrix[0].reset();
+        BABYLON.Matrix.LookAtLHToRef(BABYLON.Vector3.Zero(), position, BABYLON.Vector3.Up(), BABYLON.TmpVectors.Matrix[0]);
+        BABYLON.TmpVectors.Matrix[0].invert();
+        BABYLON.Quaternion.FromRotationMatrixToRef(BABYLON.TmpVectors.Matrix[0], result);
+    }
+
+    // This below is Unity's implementation of Quaternion.Angle/2
+    public static angle(a: BABYLON.Quaternion, b: BABYLON.Quaternion): number {
+        let f = BABYLON.Quaternion.Dot(a, b);
+        return Math.acos(Math.min(Math.abs(f), 1.0)) * 2.0 * 57.29578;
     }
 }
 
@@ -1491,6 +1711,336 @@ class XMesh {
     }
 }
 
+class HexCellPriorityQueue {
+    private _list: Array<HexCell> = new Array<Nullable<HexCell>>();
+    private _minimum: number = Number.MAX_SAFE_INTEGER;
+
+    public enqueue(cell: HexCell): void {
+        let priority = cell.searchPriority;
+        
+        if (priority < this._minimum) {
+            this._minimum = priority;
+        }
+
+        while (priority >= this._list.length) {
+            this._list.push(null);
+        }
+        
+        cell.nextWithSamePriority = this._list[priority];
+        this._list[priority] = cell;
+    }
+
+    public dequeue(): Nullable<HexCell> {
+        for (; this._minimum < this._list.length; this._minimum++) {
+            let cell = this._list[this._minimum];
+            if (cell !== null) {
+                this._list[this._minimum] = cell.nextWithSamePriority;
+                return cell;
+            }
+        }
+
+        return null;
+    }
+
+    public change(cell: HexCell, oldPriority: number): void {
+        let 
+            current: HexCell = this._list[oldPriority],
+            next: HexCell = current.nextWithSamePriority;
+
+        if (current === cell) {
+            this._list[oldPriority] = next;
+        }
+        else {
+            while (next !== cell) {
+                current = next;
+                next = current.nextWithSamePriority;
+            }
+            current.nextWithSamePriority = cell.nextWithSamePriority;
+        }
+
+        this.enqueue(cell);
+    }
+
+    public clear(): void {
+        this._list = new Array<Nullable<HexCell>>();
+        this._minimum = Number.MAX_SAFE_INTEGER;
+    }
+
+    get length(): number {
+        return this._list.length;
+    }
+}
+
+class HexCellHightlight extends BABYLON.Mesh {
+    private _colorMaterials: Map<String, BABYLON.Material>;
+
+    constructor(name: string, scene: BABYLON.Scene, parent: BABYLON.Node, colorMaterials: Map<String, BABYLON.Material>) {
+        super(name, scene, parent);
+        
+        let options = {
+            size: 10,
+            width: 10,
+            height: 10,
+            updatable: true
+        };
+
+        let vertexData = BABYLON.VertexData.CreateGround(options);
+        vertexData.applyToMesh(this);
+
+        this._colorMaterials = colorMaterials;
+
+        this.material = colorMaterials['white'];
+        this.scaling.x = 1.7;
+        this.scaling.z = 1.7;
+        this.isVisible = false;
+    }
+
+    switch(color: string): void {
+        if (!this._colorMaterials[color]) {
+            throw new Error('Invalid color material');
+        }
+
+        this.material = this._colorMaterials[color];
+    }
+}
+
+class HexUnit extends BABYLON.Mesh {
+    private static TRAVEL_SPEED = 4.0;
+    private static ROTATION_SPEED = 180.0;
+
+    private _location: HexCell;
+    private _orientation: number;
+    private _pathGizmo: BABYLON.Mesh = null;
+    public _pathToTravel: Nullable<Array<HexCell>> = null;
+
+    constructor(name: string, scene: BABYLON.Scene) {
+        super(name, scene);
+
+        let options = {
+            width: 3,
+            height: 10,
+            depth: 3
+        };
+
+        let vertexData = BABYLON.VertexData.CreateBox(options);
+        vertexData.applyToMesh(this);
+        
+        this.isPickable = true;
+        this.isVisible = true;
+        this.onBeforeRenderObservable.add(this._beforeDraw.bind(this));
+    }
+
+    private _beforeDraw(): void {
+        if (this._pathToTravel === null || this._pathToTravel.length === 0) {
+            return;
+        }
+
+        if (this._pathToTravel && this._pathGizmo) {
+            return;
+        }
+
+        let a, b, c = this._pathToTravel[0].position;
+        let points = [];
+        for (let i = 1; i < this._pathToTravel.length; i++) {
+            a = c;
+            b = this._pathToTravel[i - 1].position;
+            c = b.add(this._pathToTravel[i].position).scale(0.5);
+            for (let t = 0.0; t <= 1.0; t += 0.1) {
+                points.push(Bezier.getPoint(a, b, c, t));
+            }
+        }
+
+        a = c;
+        b = this._pathToTravel[this._pathToTravel.length - 1].position;
+        c = b;
+        for (let t = 0.0; t < 1.0; t += 0.1) {
+            points.push(Bezier.getPoint(a, b, c, t));
+        }
+
+        this._pathGizmo = BABYLON.MeshBuilder.CreateTube(
+            'path', 
+            {
+                path: points, 
+                radius: 0.5, 
+                sideOrientation: BABYLON.Mesh.DOUBLESIDE, 
+                updatable: true
+            }, 
+            this._scene
+        );
+    }
+
+    private disposePathGizmo(): void {
+        if (this._pathGizmo) {
+            this._pathGizmo.dispose();
+            this._pathGizmo = null;
+        }
+    }
+
+    private fixPosition(): void {
+        this.position.y += 5;
+    }
+
+    get location(): HexCell {
+        return this._location;
+    }
+
+    set location(cell: HexCell) {
+        if (this._location) {
+            this._location.unit = null;
+        }
+
+        this._location = cell;
+        this.validateLocation();
+        cell.unit = this;
+    }
+
+    get orientation(): number {
+        return this._orientation;
+    }
+
+    set orientation(value: number) {
+        this._orientation = value;
+        this.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(0, value, 0);
+    }
+
+    get pathToTravel(): Nullable<Array<HexCell>> {
+        return this._pathToTravel;
+    }
+
+    set pathToTravel(path: Array<HexCell>) {
+        this._pathToTravel = path;
+        this.disposePathGizmo();
+    }
+
+    public validateLocation(): void {
+        this.position = this._location.position.clone();
+        this.fixPosition();
+    }
+
+    public isValidDestination(cell: HexCell): boolean {
+        return !cell.isUnderwater && !cell.unit;
+    }
+
+    public travel(path: Array<HexCell>): void {
+        this.location = path[path.length - 1];
+        this.pathToTravel = path;
+        Coroutines.stopAll();
+        Coroutines.start(`travel_${this.name}`, this.travelPath());
+    }
+
+    private travelPath() {
+        let self = this;
+
+        return function* () {
+            let a, b, c = self.pathToTravel[0].position.clone();
+            
+            self.position = c.clone();
+            self.fixPosition();
+
+            let lookAtGen = self.lookAtPoint(self.pathToTravel[1].position.clone())(), r = null;
+            do {
+                r = lookAtGen.next();
+                yield r.value;
+            } while(!r.done);
+
+            let t = (self._scene.getEngine().getDeltaTime()/1000) * HexUnit.TRAVEL_SPEED;
+
+            for (let i = 1; i < self.pathToTravel.length; i++) {
+                a = c;
+                b = self.pathToTravel[i - 1].position;
+                c = b.add(self.pathToTravel[i].position).scale(0.5);
+                for (; t < 1.0; t += (self._scene.getEngine().getDeltaTime()/1000) * HexUnit.TRAVEL_SPEED) {
+                    // Position.
+                    self.position = Bezier.getPoint(a, b, c, t);
+                    self.fixPosition();
+
+                    // Orientation.
+                    let d = Bezier.getDerivative(a, b, c, t);
+                    d.y = 0;
+                    self.rotationQuaternion = XQuaternion.LookRotation(d);
+
+                    yield null;
+                }
+                t -= 1.0;
+            }
+
+            a = c;
+            b = self.pathToTravel[self.pathToTravel.length - 1].position;
+            c = b;
+            for (; t < 1.0; t += (self._scene.getEngine().getDeltaTime()/1000) * HexUnit.TRAVEL_SPEED) {
+                // Position.
+                self.position = Bezier.getPoint(a, b, c, t);
+                self.fixPosition();
+
+                // Orientation.
+                let d = Bezier.getDerivative(a, b, c, t);
+                d.y = 0;
+                self.rotationQuaternion = XQuaternion.LookRotation(d);
+
+                yield null;
+            }
+
+            self.position = self.location.position.clone();
+            self.fixPosition();
+
+            self.orientation = self.rotation.toQuaternion().toEulerAngles().y;
+            self.pathToTravel = null;
+
+            return;
+        };
+    }
+
+    private lookAtPoint(point: BABYLON.Vector3): any {
+        let self = this;
+
+        return function* () {
+            point.y = self.position.y;
+
+            let 
+                fromRotation = self.rotationQuaternion,
+                toRotation = XQuaternion.LookRotation(point.subtract(self.position)),
+                angle = XQuaternion.angle(fromRotation, toRotation),
+                speed = HexUnit.ROTATION_SPEED/angle;
+
+            if (angle > 0) {
+                for (
+                    let t = (self._scene.getEngine().getDeltaTime()/1000) * speed; 
+                    t < 1.0; 
+                    t += (self._scene.getEngine().getDeltaTime()/1000) * speed
+                ) {
+                    self.rotationQuaternion = BABYLON.Quaternion.Slerp(fromRotation, toRotation, t);
+                    yield null;
+                }    
+            }
+
+            self.lookAt(point);
+            self.orientation = self.rotationQuaternion.toEulerAngles().y;
+        };
+    }
+
+    public die(): void {
+        if (this.location) {
+            this.location.unit = null;
+        }
+
+        this.dispose();
+    }
+
+    public save(writer: ByteBuffer): void {
+        this.location.coordinates.save(writer);
+        writer.writeFloat32(this._orientation);
+    }
+
+    public static load(reader: ByteBuffer, grid: HexGrid): void {
+        let coordinates = HexCoordinates.load(reader),
+            orientation = reader.readFloat32();
+
+        grid.addUnit(Prefabs.unit('0', grid._scene), grid.getCellByHexCoordinates(coordinates), orientation);
+    }
+
+}
+
+
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!! 
  */
@@ -1500,6 +2050,12 @@ class HexCell extends BABYLON.Mesh {
     public coordinates: HexCoordinates;
     public neighbors: HexCell[] = new Array<HexCell>(6);
     public chunk: HexGridChunk;
+    public highlightSprite: HexCellHightlight;
+    public pathFrom: HexCell;
+    public searchHeuristic: number = 0;
+    public nextWithSamePriority: Nullable<HexCell>;
+    public searchPhase: number = 0;
+    public unit: HexUnit;
 
     private _cellPosition: BABYLON.Vector3;
     private _elevation: number = Number.MIN_VALUE;
@@ -1515,6 +2071,8 @@ class HexCell extends BABYLON.Mesh {
     private _plantLevel: number = 0;
     private _walled: boolean = false;
     private _specialIndex: number = 0;
+    private _distance: number = Number.MAX_VALUE;
+    private _showUI: boolean = true;
 
     constructor(name: string, scene: BABYLON.Scene) {
         super(name, scene);
@@ -1855,10 +2413,50 @@ class HexCell extends BABYLON.Mesh {
         return this.hasIncomingRiver ? this.incomingRiver : this.outgoingRiver;
     }
 
+    set showUI(show: boolean) {
+        this._showUI = show;
+        this.isVisible = show;
+    }
+
+    get distance(): number {
+        return this._distance;
+    }
+
+    set distance(distance: number) {
+        this._distance = distance;
+    }
+
+    public setLabel(label: Nullable<String>): void {
+        let txt: any = (<BABYLON.StandardMaterial>this.material).diffuseTexture,
+        ctx = txt.getContext();
+
+        ctx.clearRect(0, 0, 64, 64);
+        label = label || '';
+        txt.drawText(label, null, null, "32px bold monospace", "black", "transparent", true);
+    }
+
+    public enableHighlight(color: Nullable<string>): void {
+        this.highlightSprite.isVisible = true;
+        if (color !== null) {
+            this.highlightSprite.switch(color);
+        }
+    }
+
+    public disableHighlight(): void {
+        this.highlightSprite.isVisible = false;
+    }
+
+    get searchPriority(): number {
+        return this._distance + this.searchHeuristic;
+    }
+
     // Sets mesh render position from cellPosition (renders it slightly above).
     private refreshMeshPosition(): void {
         this.position = this._cellPosition.clone();
-        //this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+
+        if (this._showUI) {
+            this.position.y += HexCell.CELL_OVERLAY_ELEVATION;
+        }
     }
 
     private refreshPosition(): void {
@@ -1884,10 +2482,17 @@ class HexCell extends BABYLON.Mesh {
                 n.chunk.refresh();
             }
         }
+
+        if (this.unit) {
+            this.unit.validateLocation();
+        }
     }
 
     public refreshSelfOnly(): void {
         this.chunk.refresh();
+        if (this.unit) {
+            this.unit.validateLocation();
+        }
     }
 
     public save(writer: ByteBuffer): void {
@@ -1927,7 +2532,7 @@ class HexCell extends BABYLON.Mesh {
     public load(reader: ByteBuffer): void {
         this._terrainTypeIndex = reader.readUint8();
         this._elevation = reader.readInt8();
-        this.refreshPosition();
+        this.refreshPosition(); // SUMLJIVO!!!! (od takih stvari so weird bugi ;)
         this._waterLevel = reader.readInt8();
         this._urbanLevel = reader.readUint8();
         this._farmLevel = reader.readUint8();
@@ -1957,6 +2562,25 @@ class HexCell extends BABYLON.Mesh {
         for (let i = 0; i < this.roads.length; i++) {
             this.roads[i] = (roadFlags & (1 << i)) != 0;
         }
+    }
+
+    public loadFromObject(cell: any): void {
+        this._terrainTypeIndex = cell.terrain_type_index;
+        this._elevation = cell.elevation;
+        this.refreshPosition();
+        this._waterLevel = cell.water_level;
+        this._urbanLevel = cell.urban_level;
+        this._farmLevel = cell.farm_level;
+        this._plantLevel = cell.plant_level;
+        this._specialIndex = cell.special_index;
+        this._walled = cell.walled;
+        
+        // TODO
+        this._hasIncomingRiver = false;
+        this._incomingRiver = 0;
+        this._hasOutgoingRiver = false;
+        this._outgoingRiver = 0;
+        this.roads = [];
     }
 }
 
@@ -3723,7 +4347,7 @@ class HexGridChunk {
     }
 }
 
-class HexGrid {
+export class HexGrid {
     public static CHUNKS_TO_REFRESH: Map<string, HexGridChunk> = new Map<string, HexGridChunk>();
 
     public cellCountX: number = 20;
@@ -3733,9 +4357,17 @@ class HexGrid {
 
     public cells: HexCell[];
     public chunks: HexGridChunk[];
-    private _scene: BABYLON.Scene;
+    public _scene: BABYLON.Scene;
+    private _units: Array<HexUnit> = new Array<HexUnit>();
+    private _searchFrontier: HexCellPriorityQueue;
+    public searchFrontierPhase: number = 0;
+    private _currentPathFrom: HexCell;
+    private _currentPathTo: HexCell;
+    private _currentPathExits: boolean;
 
     private _onAwakeObservable: BABYLON.Observable<any>;
+    private _isLoaded: boolean = false;
+    private _onLoaded: Function[] = [];
 
     constructor(scene: BABYLON.Scene) {
         this._scene = scene;
@@ -3755,9 +4387,21 @@ class HexGrid {
     }
 
     private awake() {
+        this._isLoaded = true;
         HexMetrics.initializeHashGrid(1234);
         
         this.createMap(this.cellCountX, this.cellCountZ);
+
+        this._onLoaded.forEach(f => f());
+        this._onLoaded = null;
+    }
+
+    public onLoaded(f: Function): void {
+        if (this._isLoaded) {
+            f();
+        } else {
+            this._onLoaded.push(f);
+        }
     }
 
     private loadResources() {
@@ -3831,6 +4475,8 @@ class HexGrid {
             return false;
         }
 
+        this.clearPath();
+        this.clearUnits();
         if (this.chunks) {
             this.chunks.forEach((chunk: HexGridChunk) => {
                 chunk.destroy();
@@ -3886,6 +4532,16 @@ class HexGrid {
         return this.cells[index];
     }
 
+    getCellByRay(ray: BABYLON.Ray): Nullable<HexCell> {
+        let pickResult = this._scene.pickWithRay(ray);
+
+        if (pickResult && pickResult.hit) {
+            return this.getCell(pickResult.pickedPoint);
+        }
+
+        return null;
+    }
+
     getCellByHexCoordinates(coordinates: HexCoordinates): Nullable<HexCell> {
         const
             z = coordinates.z,
@@ -3912,14 +4568,23 @@ class HexGrid {
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
 
-        // let material = new BABYLON.StandardMaterial(`${x}${z}-material`, this._scene),
-        //     textTexture = this.makeCellText(cell.coordinates.toString());
-        // material.diffuseTexture = textTexture;
-        // material.opacityTexture = textTexture;
-        // material.specularColor = BABYLON.Color3.Black();
-        // cell.material = material;
+        // Cell material (dynamic text texture for displaying e.g. position/distance/...)
+        let material = new BABYLON.StandardMaterial(`${x}_${z}-material`, this._scene),
+            textTexture = this.makeCellText(cell.coordinates.x.toString());
+        material.diffuseTexture = textTexture;
+        material.opacityTexture = textTexture;
+        material.specularColor = BABYLON.Color3.Black();
+        cell.material = material;
+
+        cell.highlightSprite = new HexCellHightlight(
+            `hex_cell_highlight_${x}_${z}`, 
+            this._scene,
+            cell,
+            Prefabs.cellOutlineMaterials(this._scene),
+        );
 
         cell.elevation = 0;
+
 
         if (x > 0) {
             cell.setNeighbor(HexDirection.W, this.cells[i-1]);
@@ -3940,25 +4605,13 @@ class HexGrid {
 
         this.addCellToChunk(x, z, cell);
 
-        cell.isVisible = false;
-
         return cell;
     }
 
     private makeCellText(txt: string): BABYLON.DynamicTexture {
-        let size = 64;
-        let DTw = 10*60;
-        let DTh = 10*60;
+        let DTw = 64;
+        let DTh = 64;
         let textTexture = new BABYLON.DynamicTexture("DT", {width: DTw, height: DTh}, this._scene, false);
-        textTexture.hasAlpha = true;
-        let textCtx = textTexture.getContext();
-        textCtx.font = `${size}px bold monospace`;
-        textCtx.fillStyle = "transparent";
-        let textWidth = textCtx.measureText(txt).width;
-        let ratio = textWidth/size;
-        let fontSize = Math.floor(DTw / ratio);
-    
-        textTexture.drawText(txt, null, null, `${fontSize}px bold monospace`, "black", null);
 
         return textTexture;
     }
@@ -3974,14 +4627,63 @@ class HexGrid {
         chunk.addCell(localX + localZ * HexMetrics.chunkSizeX, cell);
     }
 
+    public findPath(fromCell: HexCell, toCell: HexCell, speed: number): void {
+        // let s: number, e: number;
+        // s = performance.now();
+        
+        this.clearPath();
+        this._currentPathFrom = fromCell;
+        this._currentPathTo = toCell;
+        this._currentPathExits = this.search(fromCell, toCell, speed);
+        this.showPath(speed);
+
+        // e = performance.now();
+        // console.log(`Search took: ${e - s} ms.`);
+    }
+
+    public showPath(speed: number): void {
+        if (this._currentPathExits) {
+            let current = this._currentPathTo;
+            while (current != this._currentPathFrom) {
+                let turn = Math.floor((current.distance - 1)/speed);
+                current.setLabel(turn.toString());
+                current.enableHighlight('white');
+                current = current.pathFrom;
+            }
+        }
+        this._currentPathFrom.enableHighlight('blue');
+        this._currentPathTo.enableHighlight('red');
+    }
+
+    public clearPath(): void {
+        if (this._currentPathExits) {
+            let current = this._currentPathTo;
+            while (current != this._currentPathFrom) {
+                current.setLabel(null);
+                current.disableHighlight();
+                current = current.pathFrom;
+            }
+            current.disableHighlight();
+            this._currentPathExits = false;
+        }
+        else if (this._currentPathFrom) {
+            this._currentPathFrom.disableHighlight();
+            this._currentPathTo.disableHighlight();
+        }
+        this._currentPathFrom = this._currentPathTo = null;
+    }
+
     public save(writer: ByteBuffer): void {
         writer.writeInt32(this.cellCountX);
         writer.writeInt32(this.cellCountZ);
 
         this.cells.forEach((cell: HexCell) => cell.save(writer));
+
+        writer.writeUint8(this._units.length);
+        this._units.forEach((unit: HexUnit) => unit.save(writer));
     }
 
-    public load(reader: ByteBuffer): void {
+    public load(reader: ByteBuffer, header: number): void {
         let 
             cellCountX = reader.readInt32(),
             cellCountZ = reader.readInt32();
@@ -3992,8 +4694,160 @@ class HexGrid {
             }    
         }
 
+        this.clearPath();
+        this.clearUnits();
         this.cells.forEach((cell: HexCell) => cell.load(reader));
         this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
+
+        if (header >= 1) {
+            let unitCount = reader.readUint8();
+            for (let i = 0; i < unitCount; i++) {
+                HexUnit.load(reader, this);
+            }
+        }
+    }
+
+    public loadFromObject(grid: any): void {
+        let 
+            cellCountX = grid.cell_count_x,
+            cellCountZ = grid.cell_count_z;
+
+        if (cellCountX != this.cellCountX || cellCountZ != this.cellCountZ) {
+            if (!this.createMap(cellCountX, cellCountZ)) {
+                return;
+            }    
+        }
+
+        let cells = Object.keys(grid.cells).map(k => grid.cells[k]);
+
+        this.clearPath();
+        this.clearUnits();
+        this.cells.forEach((cell: HexCell) => cell.loadFromObject(cells.shift()));
+        this.chunks.forEach((chunk: HexGridChunk) => chunk.refresh());
+    }
+
+    showUI(show: boolean): void {
+        this.cells.forEach((c: HexCell) => {
+            c.showUI = show;
+        });
+    }
+
+    search(fromCell: HexCell, toCell: HexCell, speed: number): boolean {
+        this.searchFrontierPhase += 2;
+
+        if (!this._searchFrontier) {
+            this._searchFrontier = new HexCellPriorityQueue();
+        } else {
+            this._searchFrontier.clear();
+        }
+
+        fromCell.searchPhase = this.searchFrontierPhase;
+        fromCell.distance = 0;
+        this._searchFrontier.enqueue(fromCell);
+
+        while (this._searchFrontier.length > 0) {
+            let current: HexCell = this._searchFrontier.dequeue();
+            if (!current) {
+                break;
+            }
+
+            current.searchPhase += 1;
+
+            if (current === toCell) {
+                return true;
+            }
+
+            let currentTurn = Math.floor((current.distance - 1)/speed);
+            for (let d: HexDirection = HexDirection.NE; d <= HexDirection.NW; d++) {
+                let neighbor = current.getNeighbor(d);
+                if (!neighbor || neighbor.searchPhase > this.searchFrontierPhase) {
+                    continue;
+                }
+                if (neighbor.isUnderwater || neighbor.unit) {
+                    continue;
+                }
+
+                let edgeType = current.getEdgeTypeForCell(neighbor);
+                if (edgeType === HexEdgeType.Cliff) {
+                    continue;
+                }
+
+                let moveCost: number;
+                if (current.hasRoadThroughEdge(d)) {
+                    moveCost = 1;
+                }
+                else if (current.walled != neighbor.walled) {
+                    continue;
+                } 
+                else {
+                    moveCost = edgeType == HexEdgeType.Flat ? 5 : 10;
+                    moveCost += neighbor.urbanLevel + neighbor.farmLevel + neighbor.plantLevel;
+                }
+
+                let distance = current.distance + moveCost;
+                let turn = Math.floor((distance - 1)/speed);
+                if (turn > currentTurn) {
+                    distance = turn * speed + moveCost;
+                }
+
+                if (neighbor.searchPhase < this.searchFrontierPhase) {
+                    neighbor.searchPhase = this.searchFrontierPhase;
+                    neighbor.distance = distance;
+                    neighbor.pathFrom = current;
+                    neighbor.searchHeuristic = neighbor.coordinates.distanceTo(toCell.coordinates);
+                    this._searchFrontier.enqueue(neighbor);
+                } 
+                else if (distance < neighbor.distance) {
+                    let oldPriority = neighbor.searchPriority;
+                    neighbor.distance = distance;
+                    neighbor.pathFrom = current;
+                    this._searchFrontier.change(neighbor, oldPriority);
+                }
+            }
+        }
+
+        return false;
+    }
+
+
+    addUnit(unit: HexUnit, location: HexCell, orientation: number): void {
+        this._units.push(unit);
+        unit.location = location;
+        unit.orientation = orientation;
+    }
+
+    removeUnit(unit: HexUnit): void {
+        let idx = this._units.indexOf(unit);
+
+        if (idx > -1) {
+            this._units.splice(idx, 1);
+        }
+
+        unit.die();
+    }
+
+    clearUnits(): void {
+        this._units.forEach((u: HexUnit) => u.die());
+        this._units = new Array<HexUnit>();
+    }
+
+    get hasPath(): boolean {
+        return this._currentPathExits;
+    }
+
+    public getPath(): Nullable<Array<HexCell>> {
+        if (!this._currentPathExits) {
+            return null;
+        }
+
+        let path = [];
+        for (let c = this._currentPathTo; c != this._currentPathFrom; c = c.pathFrom) {
+            path.push(c);
+        }
+        path.push(this._currentPathFrom);
+        path.reverse();
+        
+        return path;
     }
 }
 
@@ -4050,6 +4904,23 @@ class HexMapEditorTool {
         this._panel.style.transform = 'translateX(0px)';
     }
 
+    addPanelInput(id: string, label: string): HTMLInputElement {
+        let
+            groupEl = document.createElement('div'),
+            labelEl = document.createElement('label'),
+            inputEl = document.createElement('input');
+
+        labelEl.innerText = label;
+        inputEl.id = id; 
+
+        groupEl.appendChild(labelEl);
+        groupEl.appendChild(inputEl);
+
+        this._container.appendChild(groupEl);
+
+        return inputEl;
+    }
+
     addPanelCheckbox(label: string, callbackFn): void {
         let
             group = document.createElement('div'),
@@ -4100,9 +4971,45 @@ class HexMapEditorTool {
         this._container.appendChild(document.createElement('hr'));
     }
 
-    addPanelToggleSlider(
+    addPanelSlider(
         label: string, 
         minVal: number, 
+        maxVal: number, 
+        defaultVal: number, 
+        valueChangeCallbackFn: (a: any) => void
+    ) {
+        let
+            group = document.createElement('div'),
+            groupLabel = document.createElement('label'),
+            slider = document.createElement('input'),
+            formatLabel = (v) => { return `${label} (${v})<br>`; };
+
+        groupLabel.innerHTML = formatLabel(defaultVal);
+        
+        slider.type = 'range';
+        slider.min = `${minVal}`;
+        slider.max = `${maxVal}`;
+        slider.value = `${defaultVal}`;
+        slider.onchange = (event: any) => {
+            let v = event.srcElement.value;
+            groupLabel.innerHTML = formatLabel(v);
+            valueChangeCallbackFn(parseInt(v));
+        };
+        slider.oninput = (event: any) => {
+            let v = event.srcElement.value;
+            groupLabel.innerHTML = formatLabel(v);
+        };
+
+        group.appendChild(groupLabel);
+        group.appendChild(slider);
+
+        this._container.appendChild(group);
+        this._container.appendChild(document.createElement('hr'));
+    }
+
+    addPanelToggleSlider(
+        label: string, 
+        minVal: number,
         maxVal: number, 
         defaultVal: number, 
         toggleCallbackFn: (a: any) => void, 
@@ -4146,10 +5053,13 @@ class HexMapEditorTool {
     }
 }
 
-class HexMapEditor {
+export class HexMapEditor {
     public static POINTER_BLOCKED_BY_GUI = false;
 
+    private _enabled: boolean = false;
     private grid: HexGrid;
+    private _net: Game.Net;
+    private _gui: HexGUI;
     private _scene: BABYLON.Scene;
     
     private activeTerrainTypeIndex: number;
@@ -4174,14 +5084,17 @@ class HexMapEditor {
 
     private isPointerDown: boolean = false;
     private isDrag: boolean = false;
+    private isLeftShiftDown: boolean = false;
     private dragDirection: HexDirection;
     private previousCell: Nullable<HexCell>;
 
     private _editTool: HexMapEditorTool;
-    private _editMode: boolean = false;
+    private _nBots = 1;
 
-    constructor(grid: HexGrid) {
+    constructor(grid: HexGrid, gui: HexGUI, net: Game.Net) {
         this.grid = grid;
+        this._gui = gui;
+        this._net = net;
 
         this.makePanels();
     }
@@ -4194,38 +5107,49 @@ class HexMapEditor {
         });
     }
 
+    get enabled(): boolean {
+        return this._enabled;
+    }
+
+    set enabled(value: boolean) {
+        this._enabled = value;
+    }
+
     private makePanels() {
 
         let
-            editPanel = new HexMapEditorTool("panel-edit"),
-            creatorPanel = new HexMapEditorTool("panel-new");
+            editPanel = new HexMapEditorTool('panel-edit'),
+            creatorPanel = new HexMapEditorTool('panel-new');
 
         // ==========================================
         // ============ Edit panel. =================
         let 
             i = 0,
             terrainTypeSelection = [
-                {label: "Ignore", value: -1},
-                {label: "Sand", value: 0},
-                {label: "Grass", value: 1},
-                {label: "Mud", value: 2},
-                {label: "Stone", value: 3},
-                {label: "Snow", value: 4}
+                {label: 'Ignore', value: -1},
+                {label: 'Sand', value: 0},
+                {label: 'Grass', value: 1},
+                {label: 'Mud', value: 2},
+                {label: 'Stone', value: 3},
+                {label: 'Snow', value: 4}
             ];
         
-        editPanel.addPanelSelect("Terrain", terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
-        editPanel.addPanelSelect("River", HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
-        editPanel.addPanelSelect("Road", HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
-        editPanel.addPanelSelect("Wall", HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
-        editPanel.addPanelToggleSlider("Elevation", 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
-        editPanel.addPanelToggleSlider("Water level", 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
-        editPanel.addPanelToggleSlider("Special", 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
-        editPanel.addPanelToggleSlider("Urban level", 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
-        editPanel.addPanelToggleSlider("Farm level", 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
-        editPanel.addPanelToggleSlider("Plant level", 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
-        editPanel.addPanelToggleSlider("Brush", 0, 4, 0, () => {}, this.setBrushSize.bind(this));
-        editPanel.addPanelCheckbox("Grid", this.toggleGrid.bind(this));
-        editPanel.addPanelCheckbox("Edit", this.toggleEdit.bind(this));
+        editPanel.addPanelSelect('Terrain', terrainTypeSelection, this.setTerrainTypeIndex.bind(this));
+        editPanel.addPanelSelect('River', HexMapEditor.enumToSelectList(OptionalToggle), this.setRiverMode.bind(this));
+        editPanel.addPanelSelect('Road', HexMapEditor.enumToSelectList(OptionalToggle), this.setRoadMode.bind(this));
+        editPanel.addPanelSelect('Wall', HexMapEditor.enumToSelectList(OptionalToggle), this.setWalledMode.bind(this));
+        editPanel.addPanelToggleSlider('Elevation', 0, 7, 0, this.toggleElevation.bind(this), this.setElevation.bind(this));
+        editPanel.addPanelToggleSlider('Water level', 0, 7, 0, this.toggleWaterLevel.bind(this), this.setWaterLevel.bind(this));
+        editPanel.addPanelToggleSlider('Special', 0, 3, 0, this.toggleSpecialIndex.bind(this), this.setSpecialIndex.bind(this));
+        editPanel.addPanelToggleSlider('Urban level', 0, 3, 0, this.toggleUrbanLevel.bind(this), this.setUrbanLevel.bind(this));
+        editPanel.addPanelToggleSlider('Farm level', 0, 3, 0, this.toggleFarmLevel.bind(this), this.setFarmLevel.bind(this));
+        editPanel.addPanelToggleSlider('Plant level', 0, 3, 0, this.togglePlantLevel.bind(this), this.setPlantLevel.bind(this));
+        editPanel.addPanelToggleSlider('Brush', 0, 4, 0, () => {}, this.setBrushSize.bind(this));
+        editPanel.addPanelCheckbox('Grid', this.toggleGrid.bind(this));
+        editPanel.addPanelCheckbox('Edit', (value) => {
+            this.setEditMode(value);
+            this._gui.setEditMode(value);
+        });
 
         let 
             btnGroup = document.createElement('div'),
@@ -4233,8 +5157,8 @@ class HexMapEditor {
             loadBtn = document.createElement('input'),
             newMapBtn = document.createElement('button');
 
-        saveBtn.innerText = "Save";
-        // loadBtn.innerText = "Load";
+        saveBtn.innerText = 'Save';
+        // loadBtn.innerText = 'Load';
         loadBtn.type = 'File';
         newMapBtn.innerText = 'New Map';
 
@@ -4255,6 +5179,7 @@ class HexMapEditor {
 
         let 
             newMapButtonGroup = document.createElement('div'),
+            networkConnectGroup = document.createElement('div'),
             newSmallMapBtn = document.createElement('button'),
             newMediumMapBtn = document.createElement('button'),
             newLargeMapBtn = document.createElement('button');
@@ -4274,15 +5199,63 @@ class HexMapEditor {
         newMapButtonGroup.appendChild(document.createElement('br'));
 
         creatorPanel.container.appendChild(newMapButtonGroup);
+        creatorPanel.container.appendChild(document.createElement('hr'));
+
+        // Network tools.
+        let
+            serverAddressInput = creatorPanel.addPanelInput('server-address', 'Server Address'),
+            gameRefInput = creatorPanel.addPanelInput('game-ref', 'Game reference'),
+            playerRefInput = creatorPanel.addPanelInput('player-ref', 'Player reference'),
+            _nBotsInput = creatorPanel.addPanelSlider('N Bots', 1, 5, 1, (newValue) => {
+                this._nBots = newValue;
+            }),
+            connectBtn = document.createElement('button');
+        
+        serverAddressInput.value = 'ws://localhost:4000/socket'
+        gameRefInput.value = 'foo';
+        playerRefInput.value = 'bar';
+        connectBtn.innerText = 'Connect';
+        connectBtn.onclick = this.connectToServer.bind(this);
+
+        creatorPanel.container.appendChild(connectBtn);
     }
 
 
     attachCameraControl(camera: BABYLON.FreeCamera): void {
         this._scene = camera.getScene();
 
-        this._scene.onPointerObservable.add(this.onPointerDown.bind(this), BABYLON.PointerEventTypes.POINTERDOWN);
-        this._scene.onPointerObservable.add(this.onPointerUp.bind(this), BABYLON.PointerEventTypes.POINTERUP);
-        this._scene.onPointerObservable.add(this.onPointerMove.bind(this), BABYLON.PointerEventTypes.POINTERMOVE);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerDown), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerUp), BABYLON.PointerEventTypes.POINTERUP);
+        this._scene.onPointerObservable.add(this.whenEnabled(this.onPointerMove), BABYLON.PointerEventTypes.POINTERMOVE);
+        this._scene.onKeyboardObservable.add(this.whenEnabled(this.onKeyDown), BABYLON.KeyboardEventTypes.KEYDOWN);
+        this._scene.onKeyboardObservable.add(this.whenEnabled(this.onKeyUp), BABYLON.KeyboardEventTypes.KEYUP);
+    }
+
+    public createUnit(): void {
+        let cell = this.getCellUnderCursor();
+
+        if (cell && !cell.unit) {
+            let unit = Prefabs.unit('kek', this._scene);
+            this.grid.addUnit(unit, cell, Math.random() * 360);
+        }
+    }
+
+    public destroyUnit(): void {
+        let cell = this.getCellUnderCursor();
+        if (cell && cell.unit) {
+            this.grid.removeUnit(cell.unit);
+        }
+    }
+
+    public getCellUnderCursor(): Nullable<HexCell> {
+        let ray = this._scene.createPickingRay(
+            this._scene.pointerX,
+            this._scene.pointerY,
+            BABYLON.Matrix.Identity(),
+            this._scene.activeCamera
+        );
+ 
+        return this.grid.getCellByRay(ray);
     }
 
     private handleInput(): boolean {
@@ -4290,28 +5263,34 @@ class HexMapEditor {
             this.previousCell = null;
             return false;
         }
-
-        let pickResult = this._scene.pick(this._scene.pointerX, this._scene.pointerY);
         
-        if (pickResult.hit && pickResult.pickedMesh instanceof HexMesh) {
-            let currentCell = this.grid.getCell(pickResult.pickedPoint);
-
+        let currentCell = this.getCellUnderCursor();        
+        if (currentCell) {
             if (this.previousCell && this.previousCell !== currentCell) {
                 this.validateDrag(currentCell);
-            } else {
+            } 
+            else {
                 this.isDrag = false;
             }
 
-            if (this._editMode) {
-                this.editCells(currentCell);
-            }
-
+            this.editCells(currentCell);
             this.previousCell = currentCell;
-        } else {
+        } 
+        else {
             this.previousCell = null;
         }
 
         return true;
+    }
+
+    private whenEnabled(f: (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void): 
+        (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void 
+    {
+        return ((a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => {
+            if (this._enabled) {
+                f.call(this, a, b);
+            }
+        }).bind(this);
     }
 
     private onPointerDown(eventData: BABYLON.PointerInfo, eventState: BABYLON.EventState): void {
@@ -4337,6 +5316,24 @@ class HexMapEditor {
         this.handleInput();
     }
 
+    private onKeyDown(eventData: BABYLON.KeyboardInfo, eventState: BABYLON.EventState): void {
+        this.isLeftShiftDown = eventData.event.shiftKey;
+
+        if (eventData.event.key.toLowerCase() === 'u') {
+            if (this.isLeftShiftDown) {
+                this.destroyUnit();                
+            }
+            else {
+                this.createUnit();
+            }
+
+        }
+    }
+
+    private onKeyUp(eventData: BABYLON.KeyboardInfo, eventState: BABYLON.EventState): void {
+        this.isLeftShiftDown = false;
+    }
+
     private validateDrag(currentCell: HexCell): void {
         for (let dragDirection = HexDirection.NE; dragDirection <= HexDirection.NW; dragDirection++) {
             if (this.previousCell.getNeighbor(dragDirection) == currentCell) {
@@ -4353,12 +5350,16 @@ class HexMapEditor {
         if (!cell) {
             return;
         }
+        
+        let changes = [];
 
         if (this.activeTerrainTypeIndex >= 0) {
+            changes.push({property: 'terrain_type_index', prev_value: cell.terrainTypeIndex, new_value: this.activeTerrainTypeIndex});
             cell.terrainTypeIndex = this.activeTerrainTypeIndex;
         }
 
         if (this.isElevationSelected) {
+            changes.push({property: 'elevation', prev_value: cell.elevation, new_value: this.activeElevation});
             cell.elevation = this.activeElevation;
         }
 
@@ -4405,6 +5406,10 @@ class HexMapEditor {
                     otherCell.addRoad(this.dragDirection);
                 }
             }
+        }
+
+        if (this._net && changes.length > 0) {
+            this._net.pushCommand(new Commands.HexCell.Change(cell.coordinates, changes));
         }
     }
 
@@ -4509,8 +5514,8 @@ class HexMapEditor {
         Prefabs.toggleTerrainGrid();
     }
 
-    toggleEdit(state: boolean): void {
-        this._editMode = state;
+    setEditMode(toggle: boolean): void {
+        this._enabled = toggle;
     }
 
     public save(): void {
@@ -4524,7 +5529,7 @@ class HexMapEditor {
 
         let dataWriter = new ByteBuffer();
 
-        dataWriter.writeUint32(0); // Version header.
+        dataWriter.writeUint32(1); // Version header.
         this.grid.save(dataWriter);
 
         let
@@ -4532,7 +5537,7 @@ class HexMapEditor {
             linkEl = document.createElement('a');
 
         linkEl.href = link;
-        linkEl.innerText = "Download";
+        linkEl.innerText = 'Download';
 
         saveLink.innerHTML = '';
         saveLink.appendChild(linkEl);
@@ -4547,11 +5552,11 @@ class HexMapEditor {
             let byteBuffer = ByteBuffer.make(new DataView(<ArrayBuffer>reader.result));
             
             let version = byteBuffer.readUint32();
-            if (version === 0) {
-                this.grid.load(byteBuffer);
+            if (version <= 1)   {
+                this.grid.load(byteBuffer, version);
             }
             else {
-                console.error("Unknown map format " + version);
+                console.error('Unknown map format ' + version);
             }
 
         };
@@ -4569,5 +5574,257 @@ class HexMapEditor {
 
     newLargeMap(): void {
         this.grid.createMap(80, 60);
+    }
+
+    connectToServer(): void {
+        let 
+            serverAddrInput: HTMLInputElement = document.querySelector('#server-address'),
+            gameReferenceInput: HTMLInputElement = document.querySelector('#game-ref'),
+            playerReferenceInput: HTMLInputElement = document.querySelector('#player-ref');
+
+        if (!serverAddrInput.value || !gameReferenceInput.value || !playerReferenceInput.value) {
+            console.error('Insufficient data to connect to server.');
+        }
+
+        this._net.serverAddress = serverAddrInput.value;
+        this._net.connect(gameReferenceInput.value, playerReferenceInput.value);
+        this._net.join(this.grid, {n_bots: this._nBots});
+    }
+}
+
+export class HexGUI {
+    private _enabled: boolean = true;
+
+    // Dependencies.
+    private _grid: HexGrid;
+    private _net: Game.Net;
+    private _gameState: Game.State;
+
+    // Own properties.
+    private _currentCell: Nullable<HexCell>;
+    private _selectedUnit: Nullable<HexUnit>;
+
+    // Visual components.
+    private _nextTurnBtn: HTMLButtonElement;
+    private _turnCounter: HTMLSpanElement;
+    private _turnPlayerLabel: HTMLSpanElement;
+
+    constructor(grid: HexGrid, gameState: Game.State, net: Game.Net) {
+        this._grid = grid;
+        this._gameState = gameState;
+        this._net = net;
+
+        this.init();
+    }
+
+    public setEditMode(toggle: boolean): void {
+        this._enabled = !toggle;
+        this._grid.showUI(!toggle);
+        this._grid.clearPath();
+    }
+
+    public updateCurrentCell(): boolean {
+        let ray = this._grid._scene.createPickingRay(
+            this._grid._scene.pointerX,
+            this._grid._scene.pointerY,
+            BABYLON.Matrix.Identity(),
+            null
+        );
+
+        let cell = this._grid.getCellByRay(ray);
+
+        if (cell !== this._currentCell) {
+            this._currentCell = cell;
+            return true;
+        }
+
+        return false;
+    }
+
+    public doSelection(): void {
+        this._grid.clearPath();
+        this.updateCurrentCell();
+        if (this._currentCell) {
+            this._selectedUnit = this._currentCell.unit;
+        }
+    }
+
+    public doPathfinding(): void {
+        if (this.updateCurrentCell()) {
+            if (this._currentCell && this._selectedUnit.isValidDestination(this._currentCell)) {
+                this._grid.findPath(this._selectedUnit.location, this._currentCell, 24);
+            } 
+            else {
+                this._grid.clearPath();
+            }
+        }
+    }
+
+    public doMove(): void {
+        if (this._grid.hasPath) {
+            this._selectedUnit.travel(this._grid.getPath());
+            this._grid.clearPath();
+        }
+    }
+
+    // Initialization & updates.
+    private init(): void {
+        this.initNextTurnButton();
+        this.initTurnCounter();
+        this.initTurnPlayerLabel();
+
+        this._gameState.registerObserver('HexGUI', this.onGameStateChanged.bind(this));
+        this._grid._scene.onPointerObservable.add(this.whenEnabled(this.onPointerDown), BABYLON.PointerEventTypes.POINTERDOWN);
+        this._grid._scene.onPointerObservable.add(this.whenEnabled(this.onPointerMove), BABYLON.PointerEventTypes.POINTERMOVE);
+    }
+
+    private whenEnabled(f: (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void): 
+        (a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => void 
+    {
+        return ((a: BABYLON.PointerInfo|BABYLON.KeyboardInfo, b: BABYLON.EventState) => {
+            if (this._enabled) {
+                f.call(this, a, b);
+            }
+        }).bind(this);
+    }
+
+    private onPointerDown(info: BABYLON.PointerInfo, state: BABYLON.EventState): void {
+        if (info.event.which === 1) {
+            this.doSelection();
+        }
+        else if (info.event.which === 3) {
+            if (this._selectedUnit) {
+                this.doMove();
+            }
+        }
+    }
+
+    private onPointerMove(info: BABYLON.PointerInfo, state: BABYLON.EventState): void {
+        if (!this._selectedUnit) {
+            return;
+        }
+
+        this.doPathfinding();
+    }
+
+    private initNextTurnButton(): void {
+        this._nextTurnBtn = document.querySelector('.turn-btn button');
+
+        this._nextTurnBtn.onclick = () => {
+            if (this._gameState.isGameReady) {
+                this._net.pushCommand(new Commands.Player.FinishTurnCmd(this._gameState.turnNumber));
+            } else {
+                this._net.pushCommand(new Commands.Player.ReadyCmd(), () => {
+                    this._gameState.ready();
+                });
+            }
+        };
+
+        this.refreshTurnButton();
+    }
+
+    private initTurnCounter(): void {
+        this._turnCounter = document.querySelector('.turn-counter-value');
+        this.refreshTurnCounter();
+    }
+
+    private initTurnPlayerLabel(): void {
+        this._turnPlayerLabel = document.querySelector('.turn-player-label');
+        this.refreshTurnPlayerLabel();
+    }
+
+    private onGameStateChanged(): void {
+        this.refreshTurnButton();
+        this.refreshTurnCounter();
+        this.refreshTurnPlayerLabel();
+    }
+
+    private refreshTurnButton(): void {
+        if (!this._gameState.isGameJoined) {
+            this._nextTurnBtn.className = 'connecting';
+            this._nextTurnBtn.disabled = true;
+        }
+        else if (!this._gameState.isGameReady) {
+            this._nextTurnBtn.className = 'join';
+            this._nextTurnBtn.disabled = false;
+        } 
+        else if (this._gameState.turnActive) {
+            this._nextTurnBtn.className = 'play';
+            this._nextTurnBtn.disabled = false;
+        }
+        else {
+            this._nextTurnBtn.className = 'waiting';
+            this._nextTurnBtn.disabled = true;
+        }
+    }
+
+    private refreshTurnCounter(): void {
+        this._turnCounter.innerText = this._gameState.turnNumber.toString();
+    }
+
+    private refreshTurnPlayerLabel(): void {
+        this._turnPlayerLabel.innerText = this._gameState.activePlayer || '/';
+    }
+}
+
+class Coroutines {
+    private static HANDLES: Map<String, Generator> = new Map();
+    private static TIMERS: Map<String, any> = new Map();
+    private static ANIMATION_FRAME_REQUEST_ID = null;
+
+    public static stopAll(): void {
+        // console.log('Stopping all coroutines');
+        Coroutines.HANDLES.forEach((g: Generator, _) => g.return());
+        Coroutines.TIMERS.forEach((t: any, _) => clearTimeout(t));
+        Coroutines.HANDLES = new Map();
+        Coroutines.TIMERS = new Map();
+        
+        if (Coroutines.ANIMATION_FRAME_REQUEST_ID) {
+            window.cancelAnimationFrame(Coroutines.ANIMATION_FRAME_REQUEST_ID);
+            Coroutines.ANIMATION_FRAME_REQUEST_ID = null;
+        }
+    }
+
+    public static start(id: string, generator): void {
+        Coroutines.HANDLES.set(id, generator());
+        this.run(id);
+
+        if (!Coroutines.ANIMATION_FRAME_REQUEST_ID) {
+            Coroutines.ANIMATION_FRAME_REQUEST_ID = window.requestAnimationFrame(Coroutines.runOnFrame);
+        }
+    }
+
+    public static runOnFrame(): void {
+        // console.log('runnning frame...');
+        Coroutines.TIMERS.forEach((t: any, id: string) => {
+            if (t === null) {
+                // console.log(`Running corouting ${id} on frame.`);
+                Coroutines.run(id);
+            }
+        });
+
+        Coroutines.ANIMATION_FRAME_REQUEST_ID = window.requestAnimationFrame(Coroutines.runOnFrame);
+    }
+
+    private static run(id: string): void {
+        let result = Coroutines.HANDLES.get(id).next();
+
+        if (!result.done) {
+            let sleep = result.value;
+
+            if (sleep !== null) {
+                // console.log(`Coroutine ${id} scheduled after ${sleep}ms.`);
+                Coroutines.TIMERS.set(id, setTimeout(() => Coroutines.run(id), sleep));
+            } 
+            else {
+                // console.log(`Coroutine ${id} scheduled for next frame.`);
+                Coroutines.TIMERS.set(id, null);
+            }
+        } 
+        else {
+            // console.log(`Coroutine ${id} terminated itself.`);
+            Coroutines.HANDLES.delete(id);
+            Coroutines.TIMERS.delete(id);
+        }
     }
 }

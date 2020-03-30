@@ -4164,14 +4164,16 @@ declare module BABYLON {
     /**
      * @hidden
      */
-    export class Tmp {
-        static Color3: Color3[];
-        static Color4: Color4[];
+    export class TmpVectors {
         static Vector2: Vector2[];
         static Vector3: Vector3[];
         static Vector4: Vector4[];
         static Quaternion: Quaternion[];
         static Matrix: Matrix[];
+    }
+    export class TmpColors {
+        static Color3: Color3[];
+        static Color4: Color4[];        
     }
 }
 declare module BABYLON {
@@ -22178,6 +22180,10 @@ declare module BABYLON {
          * Specifies if depth writing should be forced
          */
         forceDepthWrite: boolean;
+        /**
+         * Specifies the depth function that should be used. 0 means the default engine function
+         */
+        depthFunction: number;
         /**
          * Specifies if there should be a separate pass for culling
          */
