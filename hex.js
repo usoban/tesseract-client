@@ -665,13 +665,14 @@ class Prefabs {
                     float river = River(vUV, noise, time.y);
                     vec4 c = clamp(emissiveColor + river, 0.0, 1.0);
 
-                    gl_FragColor = c;
+                    gl_FragColor = vec4(c.rgb, 0.5);
                 }
             `;
             Prefabs._riverMaterial = new BABYLON.ShaderMaterial('riverShader', scene, {
                 vertex: 'river',
                 fragment: 'river'
             }, {
+                needAlphaBlending: true,
                 attributes: ['position', 'color', 'uv'],
                 uniforms: ['worldViewProjection', 'time', 'emissiveColor'],
                 samplers: ['noise'],
@@ -681,8 +682,7 @@ class Prefabs {
             txt.hasAlpha = true;
             Prefabs._riverMaterial.sideOrientation = BABYLON.Orientation.CW;
             Prefabs._riverMaterial.setTexture('noise', txt);
-            Prefabs._riverMaterial.setColor4('emissiveColor', BABYLON.Color4.FromHexString('#8FB3FF11'));
-            Prefabs._riverMaterial.alpha = 0.9;
+            Prefabs._riverMaterial.setColor4('emissiveColor', Prefabs.WATER_COLOR);
             Prefabs._riverMaterial.setVector3('time', BABYLON.Vector3.Zero());
             let t = 0;
             Prefabs._riverMaterial.onBindObservable.add(() => {
@@ -763,128 +763,150 @@ class Prefabs {
     }
     static waterMaterial(scene) {
         if (!Prefabs._waterMaterial) {
-            Prefabs._waterMaterial = new BABYLON.CustomMaterial('water_material', scene);
-            Prefabs._waterMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._waterMaterial.emissiveColor = BABYLON.Color3.Black();
-            Prefabs._waterMaterial.specularColor = BABYLON.Color3.Black();
-            Prefabs._waterMaterial.diffuseColor = BABYLON.Color3.FromHexString('#8FB3FF');
-            Prefabs._waterMaterial.alpha = 0.85;
-            Prefabs._waterMaterial.diffuseTexture = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
-            Prefabs._waterMaterial.diffuseTexture.hasAlpha = true;
+            BABYLON.Effect.ShadersStore['waterVertexShader'] = `
+                precision highp float;
+                
+                attribute vec3 position;
+                attribute vec2 uv;
+                
+                uniform mat4 worldViewProjection;
+
+                varying vec3 vPositionW;
+                varying vec2  vUV;
+
+                void main(void) {
+                
+                    gl_Position = worldViewProjection * vec4(position, 1.0);
+    
+                    vPositionW = position;
+                    vUV = uv;
+                }
+            `;
+            BABYLON.Effect.ShadersStore['waterPixelShader'] = `
+                precision highp float;
+                
+                uniform sampler2D noise;
+                uniform sampler2D refractionSampler;
+                uniform vec3 time;
+                uniform vec4 emissiveColor;
+                
+                varying vec3 vPositionW;
+                varying vec2 vUV;
+                
+                ${this._wavesShaderFn}
+
+                void main(void)
+                {
+                    vec4 _color = emissiveColor;
+                    float waves = Waves(vPositionW.xz, noise, time.y);
+                    vec4 c = clamp(_color + waves, 0.0, 1.0);
+
+                    gl_FragColor = vec4(c.rgb, 0.5);
+                }
+            `;
+            Prefabs._waterMaterial = new BABYLON.ShaderMaterial('waterShader', scene, {
+                vertex: 'water',
+                fragment: 'water'
+            }, {
+                needAlphaBlending: true,
+                attributes: ['position', 'color', 'uv'],
+                uniforms: ['worldViewProjection', 'time', 'emissiveColor'],
+                samplers: ['refractionSampler', 'noise'],
+                defines: []
+            });
+            let txt = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+            txt.hasAlpha = true;
+            Prefabs._waterMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._waterMaterial.setTexture('noise', txt);
+            Prefabs._waterMaterial.setColor4('emissiveColor', Prefabs.WATER_COLOR);
+            console.log(Prefabs.WATER_COLOR);
+            Prefabs._waterMaterial.setVector3('time', BABYLON.Vector3.Zero());
+            // Prefabs._waterMaterial.alpha = 0.9;
+            // Prefabs._waterMaterial.alpha
             let t = 0;
-            Prefabs._waterMaterial.AddUniform('vTime', 'vec3', null);
             Prefabs._waterMaterial.onBindObservable.add(() => {
                 if (Prefabs._waterMaterial && Prefabs._waterMaterial.getEffect && Prefabs._waterMaterial.getEffect()) {
                     t++;
-                    Prefabs._waterMaterial.getEffect().setVector3('vTime', new BABYLON.Vector3(0.0, t / 180.0, 0.0));
+                    Prefabs._waterMaterial.getEffect().setVector3('time', new BABYLON.Vector3(1.0, t / HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0));
                 }
             });
-            Prefabs._waterMaterial.Fragment_Definitions(Prefabs._wavesShaderFn);
-            Prefabs._waterMaterial.Fragment_Custom_Diffuse(`
-                vec4 _color = vec4(vDiffuseColor.rgb, 0.0);
-                float waves = Waves(vPositionW.xz, diffuseSampler, vTime.y);
-                vec4 c = clamp(_color + waves, 0.0, 1.0);
-
-                result.rgb = c.rgb;
-                //alpha = c.a;
-            `);
         }
         return Prefabs._waterMaterial;
     }
     static waterShoreMaterial(scene) {
         if (!Prefabs._waterShoreMaterial) {
-            Prefabs._waterShoreMaterial = new BABYLON.CustomMaterial('water_shore_material', scene);
-            Prefabs._waterShoreMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-            Prefabs._waterShoreMaterial.emissiveColor = BABYLON.Color3.Black();
-            Prefabs._waterMaterial.specularColor = BABYLON.Color3.Black();
-            Prefabs._waterShoreMaterial.diffuseColor = BABYLON.Color3.FromHexString('#8FB3FF');
-            Prefabs._waterShoreMaterial.alpha = 0.85;
-            Prefabs._waterShoreMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            Prefabs._waterShoreMaterial.diffuseTexture = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
-            Prefabs._waterShoreMaterial.diffuseTexture.hasAlpha = true;
+            BABYLON.Effect.ShadersStore['watershoreVertexShader'] = `
+                precision highp float;
+                
+                attribute vec3 position;
+                attribute vec2 uv;
+                
+                uniform mat4 worldViewProjection;
+
+                varying vec2 vUV;
+                varying vec3 vPositionW;
+
+                void main(void) {
+                
+                    gl_Position = worldViewProjection * vec4(position, 1.0);
+    
+                    vUV = uv;
+                    vPositionW = position;
+                }
+            `;
+            BABYLON.Effect.ShadersStore['watershorePixelShader'] = `
+                precision highp float;
+                
+                uniform sampler2D noise;
+                uniform vec3 time;
+                uniform vec4 emissiveColor;
+                
+                varying vec2 vUV;
+                varying vec3 vPositionW;
+                
+                ${this._foamShaderFn}
+                ${this._wavesShaderFn}
+
+                void main(void)
+                {
+                    vec4 _color = vec4(emissiveColor.rgb, 0.0);
+                    float shore = vUV.y;
+                    float foam = Foam(shore, vPositionW.xz, noise, time.y);
+                    float waves = Waves(vPositionW.xz, noise, time.y);
+                    waves *= 1.0 - shore;
+    
+                    vec4 c = clamp(_color + max(foam, waves), 0.0, 1.0);
+    
+                    gl_FragColor = vec4(c.rgb, 0.5);
+                }
+            `;
+            Prefabs._waterShoreMaterial = new BABYLON.ShaderMaterial('watershoreShader', scene, {
+                vertex: 'watershore',
+                fragment: 'watershore'
+            }, {
+                needAlphaBlending: true,
+                attributes: ['position', 'color', 'uv'],
+                uniforms: ['worldViewProjection', 'time', 'emissiveColor'],
+                samplers: ['noise'],
+                defines: []
+            });
+            let txt = new BABYLON.Texture('./assets/gfx/material/noise.png', scene, true, false, BABYLON.Texture.BILINEAR_SAMPLINGMODE);
+            txt.hasAlpha = true;
+            Prefabs._waterShoreMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._waterShoreMaterial.setTexture('noise', txt);
+            Prefabs._waterShoreMaterial.setColor4('emissiveColor', Prefabs.WATER_COLOR);
+            Prefabs._waterShoreMaterial.setVector3('time', BABYLON.Vector3.Zero());
             let t = 0;
-            Prefabs._waterShoreMaterial.AddUniform('vTime', 'vec3', null);
             Prefabs._waterShoreMaterial.onBindObservable.add(() => {
                 if (Prefabs._waterShoreMaterial && Prefabs._waterShoreMaterial.getEffect && Prefabs._waterShoreMaterial.getEffect()) {
                     t++;
-                    Prefabs._waterShoreMaterial.getEffect().setVector3('vTime', new BABYLON.Vector3(0.0, t / 180.0, 0.0));
+                    Prefabs._waterShoreMaterial.getEffect().setVector3('time', new BABYLON.Vector3(1.0, t / HexMetrics.waterFlowAnimationSpeedCoefficient, 1.0));
                 }
             });
-            Prefabs._waterShoreMaterial.Fragment_Definitions(`
-                ${Prefabs._foamShaderFn}
-                
-                ${Prefabs._wavesShaderFn}
-            `);
-            Prefabs._waterShoreMaterial.Fragment_Custom_Diffuse(`
-                vec4 _color = vec4(vDiffuseColor.rgb, 0.0);
-                float shore = vDiffuseUV.y;
-                float foam = Foam(shore, vPositionW.xz, diffuseSampler, vTime.y);
-                float waves = Waves(vPositionW.xz, diffuseSampler, vTime.y);
-                waves *= 1.0 - shore;
-
-                vec4 c = clamp(_color + max(foam, waves), 0.0, 1.0);
-
-                result.rgb = c.rgb;
-                //alpha = c.a;
-            `);
         }
         return Prefabs._waterShoreMaterial;
     }
     static estuariesMaterial(scene) {
-        // if (!Prefabs._estuariesMaterial) {
-        //     Prefabs._estuariesMaterial = new BABYLON.PBRCustomMaterial('estuaries_material', scene);
-        //     Prefabs._estuariesMaterial.sideOrientation = BABYLON.Orientation.CW; // NOTE: if CCW, backfaceCulling must be turned on!!
-        //     Prefabs._estuariesMaterial.emissiveColor = BABYLON.Color3.FromHexString('#ffffff');
-        //     Prefabs._estuariesMaterial.albedoColor = BABYLON.Color3.FromHexString('#ffffff');
-        //     Prefabs._estuariesMaterial.metallic = 0;
-        //     Prefabs._estuariesMaterial.roughness = 0.5;
-        //     Prefabs._estuariesMaterial.alpha = 0.9;
-        //     Prefabs._estuariesMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-        //     Prefabs._estuariesMaterial.transparencyMode = 2; 
-        //     Prefabs._estuariesMaterial.albedoTexture = new BABYLON.Texture(
-        //         './assets/gfx/material/noise.png',
-        //         scene,
-        //         true,
-        //         false,
-        //         BABYLON.Texture.BILINEAR_SAMPLINGMODE
-        //     );
-        //     Prefabs._estuariesMaterial.albedoTexture.coordinatesIndex = 1;
-        //     Prefabs._estuariesMaterial.albedoTexture.hasAlpha = true;
-        //     let t = 0;
-        //     Prefabs._estuariesMaterial.AddUniform('vTime', 'vec3', null);
-        //     Prefabs._estuariesMaterial.onBindObservable.add(() => {
-        //         if (Prefabs._estuariesMaterial && Prefabs._estuariesMaterial.getEffect && Prefabs._estuariesMaterial.getEffect()) {
-        //             t++;
-        //             Prefabs._estuariesMaterial.getEffect().setVector3('vTime', new BABYLON.Vector3(0.0, t/180.0, 0.0));
-        //         }
-        //     });
-        //     Prefabs._estuariesMaterial.Vertex_Definitions(`
-        //         out vec2 vAlbedoUV2;
-        //     `);
-        //     Prefabs._estuariesMaterial.Vertex_MainEnd(`
-        //         vAlbedoUV2 = uv2;
-        //     `);
-        //     Prefabs._estuariesMaterial.Fragment_Definitions(`
-        //         in vec2 vAlbedoUV2;
-        //         ${Prefabs._foamShaderFn}
-        //         ${Prefabs._wavesShaderFn}
-        //         ${Prefabs._riverShaderFn}
-        //     `);
-        //     Prefabs._estuariesMaterial.Fragment_Custom_Albedo(`
-        //         vec4 _color = vec4(vEmissiveColor, 0.0);
-        //         float shore = vAlbedoUV.y;
-        //         float foam = Foam(shore, vPositionW.xz, albedoSampler, vTime.y);
-        //         float waves = Waves(vPositionW.xz, albedoSampler, vTime.y);
-        //         waves *= 1.0 - shore;
-        //         float shoreWater = max(foam, waves);
-        //         float river = River(vAlbedoUV2, albedoSampler, vTime.y);
-        //         float water = mix(shoreWater, river, vAlbedoUV.x);
-        //         vec4 c = clamp(_color + water, 0.0, 1.0);
-        //         surfaceAlbedo.rgb = c.rgb;
-        //         alpha = c.a;
-        //     `);
-        // }
-        // return Prefabs._estuariesMaterial;
         if (!Prefabs._estuariesMaterial) {
             BABYLON.Effect.ShadersStore['estuariesVertexShader'] = `
                 precision highp float;
@@ -941,13 +963,14 @@ class Prefabs {
                     float water = mix(shoreWater, river, vUV.x);
                     vec4 c = clamp(_color + water, 0.0, 1.0);
 
-                    gl_FragColor = c;
+                    gl_FragColor = vec4(c.rgb, 0.5);
                 }
             `;
             Prefabs._estuariesMaterial = new BABYLON.ShaderMaterial('estuariesShader', scene, {
                 vertex: 'estuaries',
                 fragment: 'estuaries'
             }, {
+                needAlphaBlending: true,
                 attributes: ['position', 'color', 'uv', 'uv2'],
                 uniforms: ['worldViewProjection', 'time', 'emissiveColor'],
                 samplers: ['noise'],
@@ -958,9 +981,8 @@ class Prefabs {
             txt.hasAlpha = true;
             Prefabs._estuariesMaterial.sideOrientation = BABYLON.Orientation.CW;
             Prefabs._estuariesMaterial.setTexture('noise', txt);
-            Prefabs._estuariesMaterial.setColor4('emissiveColor', BABYLON.Color4.FromHexString('#8FB3FF11'));
+            Prefabs._estuariesMaterial.setColor4('emissiveColor', Prefabs.WATER_COLOR);
             Prefabs._estuariesMaterial.setVector3('time', BABYLON.Vector3.Zero());
-            Prefabs._estuariesMaterial.alpha = 0.9;
             let t = 0;
             Prefabs._estuariesMaterial.onBindObservable.add(() => {
                 if (Prefabs._estuariesMaterial && Prefabs._estuariesMaterial.getEffect && Prefabs._estuariesMaterial.getEffect()) {
@@ -1199,6 +1221,7 @@ class Prefabs {
 }
 Prefabs.GRID_ON = "#define GRID_ON";
 Prefabs.GRID_STATUS = false;
+Prefabs.WATER_COLOR = BABYLON.Color4.FromHexString("#002f9eff");
 Prefabs._foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
             shore = sqrt(shore) * 0.9;
