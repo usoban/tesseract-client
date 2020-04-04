@@ -165,6 +165,15 @@ class Bezier {
         return b.subtract(a).scale(1.0 - t).add(c.subtract(b).scale(t)).scale(2.0);
     }
 }
+class Color32 {
+    constructor() {
+        // Store a color as bytes in 0-255 range.
+        this.r = 0;
+        this.g = 0;
+        this.b = 0;
+        this.a = 0;
+    }
+}
 class HexMetrics {
     static getFirstCorner(direction) {
         return HexMetrics.corners[direction];
@@ -508,20 +517,22 @@ class Prefabs {
     }
     static terrainMaterial(scene) {
         if (!Prefabs._terrainMaterial) {
-            BABYLON.Effect.ShadersStore['customVertexShader'] = `
+            BABYLON.Effect.ShadersStore['terrainVertexShader'] = `
                 precision highp float;
                 
                 attribute vec3 position;
                 attribute vec2 uv;
-                attribute vec3 terrainType;
+                attribute vec3 cellIndex;
                 attribute vec4 color;
                 
                 uniform mat4 worldViewProjection;
 
                 varying vec3 vPosition;
                 varying vec2 vUV;
-                varying vec3 vUV3;
+                varying vec3 vTerrain;
                 varying vec4 vColor;
+
+                ${Prefabs._cellDataShaderFn}
 
                 void main(void) {
                 
@@ -529,10 +540,17 @@ class Prefabs {
                     
                     vPosition = position;
                     vColor = color;
-                    vUV3 = terrainType;
+
+                    vec4 cell0 = GetCellData(cellIndex, 0);
+                    vec4 cell1 = GetCellData(cellIndex, 1);
+                    vec4 cell2 = GetCellData(cellIndex, 2);
+
+                    vTerrain.x = cell0.w;
+                    vTerrain.y = cell1.w;
+                    vTerrain.z = cell2.w;
                 }
             `;
-            BABYLON.Effect.ShadersStore['customPixelShader'] = `
+            BABYLON.Effect.ShadersStore['terrainPixelShader'] = `
                 precision highp float;
                 
                 uniform sampler2D textures[5];
@@ -541,7 +559,7 @@ class Prefabs {
                 varying vec3 vPosition;
                 varying vec2 vUV;
                 varying vec4 vColor;
-                varying vec3 vUV3;
+                varying vec3 vTerrain;
                 
                 vec4 tex2DArray(sampler2D texturesArray[5], vec2 uv, int idx) {
                     // NOTE: apparently, we cannot do just this:
@@ -587,9 +605,9 @@ class Prefabs {
                 void main(void)
                 {
                     vec4 c = (
-                        getTerrainColor(textures, vPosition.xz, vUV3, vColor, 0) +
-                        getTerrainColor(textures, vPosition.xz, vUV3, vColor, 1) +
-                        getTerrainColor(textures, vPosition.xz, vUV3, vColor, 2)
+                        getTerrainColor(textures, vPosition.xz, vTerrain, vColor, 0) +
+                        getTerrainColor(textures, vPosition.xz, vTerrain, vColor, 1) +
+                        getTerrainColor(textures, vPosition.xz, vTerrain, vColor, 2)
                     );
 
                     vec2 gridUV = vPosition.xz;
@@ -605,13 +623,13 @@ class Prefabs {
                     gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
                 }
             `;
-            Prefabs._terrainMaterial = new BABYLON.ShaderMaterial('customPixelShader', scene, {
-                vertex: 'custom',
-                fragment: 'custom'
+            Prefabs._terrainMaterial = new BABYLON.ShaderMaterial('terrainPixelShader', scene, {
+                vertex: 'terrain',
+                fragment: 'terrain'
             }, {
-                attributes: ['position', 'color', 'uv', 'terrainType'],
-                uniforms: ['worldViewProjection'],
-                samplers: ['textures', 'grid'],
+                attributes: ['position', 'color', 'uv', 'cellIndex'],
+                uniforms: ['worldViewProjection', 'hexCellDataTexelSize'],
+                samplers: ['textures', 'grid', 'hexCellData'],
                 defines: Prefabs.GRID_STATUS ? [Prefabs.GRID_ON] : []
             });
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
@@ -623,6 +641,14 @@ class Prefabs {
                 Prefabs._snowTexture
             ]);
             Prefabs._terrainMaterial.setTexture('grid', Prefabs._gridTexture);
+            if (!Prefabs.hexCellShaderData) {
+                throw new Error('HexCellData not ready yet.');
+            }
+            else {
+                Prefabs._terrainMaterial.setTexture('hexCellData', Prefabs.hexCellShaderData.getTexture());
+                Prefabs._terrainMaterial.setVector4('hexCellDataTexelSize', this.hexCellShaderData.getTexelSize());
+            }
+            // Prefabs._terrainMaterial.dir
         }
         return Prefabs._terrainMaterial;
     }
@@ -819,10 +845,7 @@ class Prefabs {
             Prefabs._waterMaterial.sideOrientation = BABYLON.Orientation.CW;
             Prefabs._waterMaterial.setTexture('noise', txt);
             Prefabs._waterMaterial.setColor4('emissiveColor', Prefabs.WATER_COLOR);
-            console.log(Prefabs.WATER_COLOR);
             Prefabs._waterMaterial.setVector3('time', BABYLON.Vector3.Zero());
-            // Prefabs._waterMaterial.alpha = 0.9;
-            // Prefabs._waterMaterial.alpha
             let t = 0;
             Prefabs._waterMaterial.onBindObservable.add(() => {
                 if (Prefabs._waterMaterial && Prefabs._waterMaterial.getEffect && Prefabs._waterMaterial.getEffect()) {
@@ -1080,17 +1103,16 @@ class Prefabs {
         let terrain = new HexMesh(name, Prefabs.terrainMaterial(scene), scene);
         terrain.isVisible = true;
         terrain.isPickable = true;
-        terrain._useColors = true;
+        terrain._useCellData = true;
         terrain._useCollider = true;
         terrain._useUVCoordinates = false;
-        terrain._useTerrainTypes = true;
         return terrain;
     }
     static rivers(name, scene) {
         let rivers = new HexMesh(name, Prefabs.riverMaterial(scene), scene);
         rivers.isVisible = true;
         rivers.isPickable = false;
-        rivers._useColors = false;
+        rivers._useCellData = false;
         rivers._useCollider = false;
         rivers._useUVCoordinates = true;
         rivers.alphaIndex = 100;
@@ -1100,7 +1122,7 @@ class Prefabs {
         let roads = new HexMesh(name, Prefabs.roadMaterial(scene), scene);
         roads.isVisible = true;
         roads.isPickable = false;
-        roads._useColors = false;
+        roads._useCellData = false;
         roads._useCollider = false;
         roads._useUVCoordinates = true;
         return roads;
@@ -1109,7 +1131,7 @@ class Prefabs {
         let water = new HexMesh(name, Prefabs.waterMaterial(scene), scene);
         water.isVisible = true;
         water.isPickable = false;
-        water._useColors = false;
+        water._useCellData = false;
         water._useCollider = false;
         water._useUVCoordinates = false;
         water.alphaIndex = 40;
@@ -1119,7 +1141,7 @@ class Prefabs {
         let waterShore = new HexMesh(name, Prefabs.waterShoreMaterial(scene), scene);
         waterShore.isVisible = true;
         waterShore.isPickable = false;
-        waterShore._useColors = false;
+        waterShore._useCellData = false;
         waterShore._useCollider = false;
         waterShore._useUVCoordinates = true;
         waterShore.alphaIndex = 50;
@@ -1129,7 +1151,7 @@ class Prefabs {
         let estuaries = new HexMesh(name, Prefabs.estuariesMaterial(scene), scene);
         estuaries.isVisible = true;
         estuaries.isPickable = false;
-        estuaries._useColors = false;
+        estuaries._useCellData = false;
         estuaries._useCollider = false;
         estuaries._useUVCoordinates = true;
         estuaries._useUV2Coordinates = true;
@@ -1161,7 +1183,7 @@ class Prefabs {
         let walls = new HexMesh(name, Prefabs.wallsMaterial(scene), scene);
         walls.isVisible = true;
         walls.isPickable = false;
-        walls._useColors = false;
+        walls._useCellData = false;
         walls._useCollider = false;
         walls._useUVCoordinates = false;
         walls.alphaIndex = 150;
@@ -1221,7 +1243,7 @@ class Prefabs {
 }
 Prefabs.GRID_ON = "#define GRID_ON";
 Prefabs.GRID_STATUS = false;
-Prefabs.WATER_COLOR = BABYLON.Color4.FromHexString("#002f9eff");
+Prefabs.WATER_COLOR = BABYLON.Color4.FromHexString('#002f9eff');
 Prefabs._foamShaderFn = `
         float Foam(float shore, vec2 worldXZ, sampler2D noiseTex, float t) {
             shore = sqrt(shore) * 0.9;
@@ -1279,6 +1301,24 @@ Prefabs._riverShaderFn = `
             vec4 noise2 = texture2D(noiseTex, uv2);
 
             return noise.x * noise2.w;
+        }
+    `;
+Prefabs._cellDataShaderFn = `
+        uniform sampler2D hexCellData;
+        uniform vec4 hexCellDataTexelSize;
+
+        vec4 GetCellData(vec3 texcoord2, int idx) {
+            vec2 uv;
+
+            uv.x = (texcoord2[idx] + 0.5) * hexCellDataTexelSize.x;
+            float row = floor(uv.x);
+            uv.x -= row;
+            uv.y = (row + 0.5) * hexCellDataTexelSize.y;
+            
+            vec4 data = textureLod(hexCellData, uv, 0.0);
+            data.w *= 255.0;
+
+            return data;
         }
     `;
 class XQuaternion {
@@ -1611,6 +1651,55 @@ class HexUnit extends BABYLON.Mesh {
 }
 HexUnit.TRAVEL_SPEED = 4.0;
 HexUnit.ROTATION_SPEED = 180.0;
+class HexCellShaderData {
+    constructor() {
+        this._enabled = false;
+    }
+    init(x, z, scene) {
+        this.cellTextureData = new Array();
+        this._x = x;
+        this._z = z;
+        for (let i = 0; i < x * z; i++) {
+            this.cellTextureData[i] = new Color32();
+        }
+        this.cellTexture = new BABYLON.RawTexture(this.makeDataView(), x, z, BABYLON.Engine.TEXTUREFORMAT_RGBA, scene, false, false, BABYLON.Engine.TEXTURE_NEAREST_SAMPLINGMODE, BABYLON.Engine.TEXTURETYPE_UNSIGNED_BYTE);
+        this.cellTexture.anisotropicFilteringLevel = 1;
+        // this.cellTexture.wrapU = 0;
+        // this.cellTexture.wrapV = 0;
+        // this.cellTexture.wrapR = 0;
+        this._enabled = true;
+        scene.onAfterRenderObservable.add(this.refresh.bind(this));
+    }
+    makeDataView() {
+        let buffer = new Uint8Array(this.cellTextureData.length * 4), offset = 0;
+        this.cellTextureData.forEach((color) => {
+            buffer[offset] = color.r;
+            buffer[offset + 1] = color.g;
+            buffer[offset + 2] = color.b;
+            buffer[offset + 3] = color.a;
+            offset += 4;
+        });
+        return buffer;
+    }
+    getTexture() {
+        return this.cellTexture;
+    }
+    getTexelSize() {
+        return new BABYLON.Vector4(1.0 / this._x, 1.0 / this._z, this._x, this._z);
+    }
+    refresh() {
+        if (!this._enabled) {
+            return;
+        }
+        this.cellTexture.update(this.makeDataView());
+        this._enabled = false;
+    }
+    refreshTerrain(cell) {
+        this.cellTextureData[cell.index].a = cell.terrainTypeIndex;
+        cell.chunk.touch();
+        this._enabled = true;
+    }
+}
 /**
  * CAUTION: UNTIL HexCell extends BABYLON.Mesh, ALWAYS SET POSITION VIA cellPostion!!
  */
@@ -1638,6 +1727,12 @@ class HexCell extends BABYLON.Mesh {
         };
         let vertexData = BABYLON.VertexData.CreateGround(options);
         vertexData.applyToMesh(this);
+    }
+    set index(idx) {
+        this._index = idx;
+    }
+    get index() {
+        return this._index;
     }
     getNeighbor(direction) {
         return this.neighbors[direction];
@@ -1678,7 +1773,7 @@ class HexCell extends BABYLON.Mesh {
             return;
         }
         this._terrainTypeIndex = value;
-        this.refresh();
+        this.shaderData.refreshTerrain(this);
     }
     get hasIncomingRiver() {
         return this._hasIncomingRiver;
@@ -1896,7 +1991,7 @@ class HexCell extends BABYLON.Mesh {
         let txt = this.material.diffuseTexture, ctx = txt.getContext();
         ctx.clearRect(0, 0, 64, 64);
         label = label || '';
-        txt.drawText(label, null, null, "32px bold monospace", "black", "transparent", true);
+        txt.drawText(label, null, null, '32px bold monospace', 'black', 'transparent', true);
     }
     enableHighlight(color) {
         this.highlightSprite.isVisible = true;
@@ -1909,6 +2004,12 @@ class HexCell extends BABYLON.Mesh {
     }
     get searchPriority() {
         return this._distance + this.searchHeuristic;
+    }
+    set shaderData(shaderData) {
+        this._shaderData = shaderData;
+    }
+    get shaderData() {
+        return this._shaderData;
     }
     // Sets mesh render position from cellPosition (renders it slightly above).
     refreshMeshPosition() {
@@ -1976,6 +2077,7 @@ class HexCell extends BABYLON.Mesh {
     }
     load(reader) {
         this._terrainTypeIndex = reader.readUint8();
+        this.shaderData.refreshTerrain(this);
         this._elevation = reader.readInt8();
         this.refreshPosition(); // SUMLJIVO!!!! (od takih stvari so weird bugi ;)
         this._waterLevel = reader.readInt8();
@@ -2054,13 +2156,14 @@ class EdgeVertices {
     }
 }
 class HexMesh extends BABYLON.Mesh {
+    // public _useTerrainTypes: boolean = false;
     constructor(name, material, scene) {
         super(name, scene);
-        this._useColors = true;
+        // public _useColors: boolean = true;
+        this._useCellData = true;
         this._useUVCoordinates = false;
         this._useUV2Coordinates = false;
         this._useCollider = true;
-        this._useTerrainTypes = false;
         this.material = material;
         this._setReady(false);
     }
@@ -2070,29 +2173,40 @@ class HexMesh extends BABYLON.Mesh {
         vertexData.positions = this._vertices;
         vertexData.indices = this._triangles;
         vertexData.normals = normals;
-        if (this._useColors) {
-            vertexData.colors = this._colors;
+        if (this._useCellData) {
+            vertexData.colors = this._cellWeights;
+            this.setVerticesData('cellIndex', this._cellIndices, false, 3); // TODO: why is this not updatable?
         }
+        // if (this._useColors) {
+        //     vertexData.colors = this._colors;
+        // }
         if (this._useUVCoordinates) {
             vertexData.uvs = this._uvs;
         }
         if (this._useUV2Coordinates) {
             vertexData.uvs2 = this._uvs2;
         }
-        if (this._useTerrainTypes) {
-            this.setVerticesData("terrainType", this._terrainTypes, false, 3);
-        }
+        // if (this._useTerrainTypes) {
+        //     this.setVerticesData("terrainType", this._terrainTypes, false, 3);
+        // }
         vertexData.applyToMesh(this, true);
         this._setReady(true);
         this.isPickable = this._useCollider;
     }
+    touch() {
+        if (this._useCellData) {
+            this.setVerticesData('cellIndex', this._cellIndices, false, 3);
+        }
+    }
     clear() {
         this._vertices = [];
         this._triangles = [];
-        this._colors = [];
+        // this._colors = [];
+        this._cellWeights = [];
+        this._cellIndices = [];
         this._uvs = [];
         this._uvs2 = [];
-        this._terrainTypes = [];
+        // this._terrainTypes = [];
     }
     addTriangle(v1, v2, v3) {
         const vertexIndex = this._vertices.length / 3;
@@ -2112,15 +2226,26 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles.push(vertexIndex + 1);
         this._triangles.push(vertexIndex + 2);
     }
-    addTriangleColor1(color) {
-        this.addColor(color);
-        this.addColor(color);
-        this.addColor(color);
+    // addTriangleColor1(color: BABYLON.Color4): void {
+    //     this.addColor(color);
+    //     this.addColor(color);
+    //     this.addColor(color);
+    // }
+    // addTriangleColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4): void {
+    //     this.addColor(color1);
+    //     this.addColor(color2);
+    //     this.addColor(color3);
+    // }
+    addTriangleCellData(indices, weights) {
+        this.addTriangleCellData3(indices, weights, weights, weights);
     }
-    addTriangleColor(color1, color2, color3) {
-        this.addColor(color1);
-        this.addColor(color2);
-        this.addColor(color3);
+    addTriangleCellData3(indices, weights1, weights2, weights3) {
+        this.addCellIndices(indices);
+        this.addCellIndices(indices);
+        this.addCellIndices(indices);
+        this.addCellWeights(weights1);
+        this.addCellWeights(weights2);
+        this.addCellWeights(weights3);
     }
     addQuad(v1, v2, v3, v4) {
         const vertexIndex = this._vertices.length / 3;
@@ -2148,36 +2273,63 @@ class HexMesh extends BABYLON.Mesh {
         this._triangles.push(vertexIndex + 2);
         this._triangles.push(vertexIndex + 3);
     }
-    addQuadColor(color1, color2, color3, color4) {
-        this.addColor(color1);
-        this.addColor(color2);
-        this.addColor(color3);
-        this.addColor(color4);
+    addQuadCellData4(indices, weights1, weights2, weights3, weights4) {
+        this.addCellIndices(indices);
+        this.addCellIndices(indices);
+        this.addCellIndices(indices);
+        this.addCellIndices(indices);
+        this.addCellWeights(weights1);
+        this.addCellWeights(weights2);
+        this.addCellWeights(weights3);
+        this.addCellWeights(weights4);
     }
-    /** Adds only two colors to the quad. */
-    addQuadColor2(color1, color2) {
-        this.addColor(color1);
-        this.addColor(color1);
-        this.addColor(color2);
-        this.addColor(color2);
+    addQuadCellData2(indices, weights1, weights2) {
+        this.addQuadCellData4(indices, weights1, weights1, weights2, weights2);
     }
-    /** Adds a single color to the quad. */
-    addQuadColor1(color) {
-        this.addColor(color);
-        this.addColor(color);
-        this.addColor(color);
-        this.addColor(color);
+    addQuadCellData(indices, weights) {
+        this.addQuadCellData4(indices, weights, weights, weights, weights);
     }
+    // addQuadColor(color1: BABYLON.Color4, color2: BABYLON.Color4, color3: BABYLON.Color4, color4: BABYLON.Color4): void {
+    //     this.addColor(color1);
+    //     this.addColor(color2);
+    //     this.addColor(color3);
+    //     this.addColor(color4);
+    // }
+    // /** Adds only two colors to the quad. */
+    // addQuadColor2(color1: BABYLON.Color4, color2: BABYLON.Color4): void {
+    //     this.addColor(color1);
+    //     this.addColor(color1);
+    //     this.addColor(color2);
+    //     this.addColor(color2);
+    // }
+    // /** Adds a single color to the quad. */
+    // addQuadColor1(color: BABYLON.Color4): void {
+    //     this.addColor(color);
+    //     this.addColor(color);
+    //     this.addColor(color);
+    //     this.addColor(color);
+    // }
     addVertex(vertex) {
         this._vertices.push(vertex.x);
         this._vertices.push(vertex.y);
         this._vertices.push(vertex.z);
     }
-    addColor(color) {
-        this._colors.push(color.r);
-        this._colors.push(color.g);
-        this._colors.push(color.b);
-        this._colors.push(color.a);
+    // addColor(color: BABYLON.Color4): void {
+    //     this._colors.push(color.r);
+    //     this._colors.push(color.g);
+    //     this._colors.push(color.b);
+    //     this._colors.push(color.a);
+    // }
+    addCellIndices(indices) {
+        this._cellIndices.push(indices.x);
+        this._cellIndices.push(indices.y);
+        this._cellIndices.push(indices.z);
+    }
+    addCellWeights(weights) {
+        this._cellWeights.push(weights.r);
+        this._cellWeights.push(weights.g);
+        this._cellWeights.push(weights.b);
+        this._cellWeights.push(weights.a);
     }
     addTriangleUV(uv1, uv2, uv3) {
         this.addUV(uv1);
@@ -2220,22 +2372,6 @@ class HexMesh extends BABYLON.Mesh {
     addUV2(uv) {
         this._uvs2.push(uv.x);
         this._uvs2.push(uv.y);
-    }
-    addTriangleTerrainTypes(types) {
-        this.addTerrainType(types);
-        this.addTerrainType(types);
-        this.addTerrainType(types);
-    }
-    addQuadTerrainType(types) {
-        this.addTerrainType(types);
-        this.addTerrainType(types);
-        this.addTerrainType(types);
-        this.addTerrainType(types);
-    }
-    addTerrainType(type) {
-        this._terrainTypes.push(type.x);
-        this._terrainTypes.push(type.y);
-        this._terrainTypes.push(type.z);
     }
 }
 var HexFeatureDensity;
@@ -2725,7 +2861,7 @@ class HexGridChunk {
         }
     }
     triangulateCellWithoutRiver(direction, cell, center, e) {
-        this.triangulateEdgeFan(center, e, cell.terrainTypeIndex);
+        this.triangulateEdgeFan(center, e, cell.index);
         if (cell.hasRoads) {
             let interpolators = HexMetrics.getRoadInterpolators(direction, cell);
             this.triangulateRoad(center, BABYLON.Vector3.Lerp(center, e.v1, interpolators.x), BABYLON.Vector3.Lerp(center, e.v5, interpolators.y), e, cell.hasRoadThroughEdge(direction));
@@ -2756,20 +2892,29 @@ class HexGridChunk {
         center = BABYLON.Vector3.Lerp(centerL, centerR, 0.5);
         m = EdgeVertices.fromCorners(BABYLON.Vector3.Lerp(centerL, e.v1, 0.5), BABYLON.Vector3.Lerp(centerR, e.v5, 0.5), 1 / 6);
         m.v3.y = center.y = e.v3.y;
-        this.triangulateEdgeStrip(m, HexGridChunk.color1, cell.terrainTypeIndex, e, HexGridChunk.color1, cell.terrainTypeIndex);
+        this.triangulateEdgeStrip(m, HexGridChunk.weights1, cell.index, e, HexGridChunk.weights1, cell.index);
         this.terrain.addTriangle(centerL, m.v1, m.v2);
         this.terrain.addQuad(centerL, center, m.v2, m.v3);
         this.terrain.addQuad(center, centerR, m.v3, m.v4);
         this.terrain.addTriangle(centerR, m.v4, m.v5);
-        this.terrain.addTriangleColor1(HexGridChunk.color1);
-        this.terrain.addQuadColor1(HexGridChunk.color1);
-        this.terrain.addQuadColor1(HexGridChunk.color1);
-        this.terrain.addTriangleColor1(HexGridChunk.color1);
-        let types = new BABYLON.Vector3(cell.terrainTypeIndex, cell.terrainTypeIndex, cell.terrainTypeIndex);
-        this.terrain.addTriangleTerrainTypes(types);
-        this.terrain.addQuadTerrainType(types);
-        this.terrain.addQuadTerrainType(types);
-        this.terrain.addTriangleTerrainTypes(types);
+        let indices = new BABYLON.Vector3(cell.index, cell.index, cell.index);
+        this.terrain.addTriangleCellData(indices, HexGridChunk.weights1);
+        this.terrain.addQuadCellData(indices, HexGridChunk.weights1);
+        this.terrain.addQuadCellData(indices, HexGridChunk.weights1);
+        this.terrain.addTriangleCellData(indices, HexGridChunk.weights1);
+        // this.terrain.addTriangleColor1(HexGridChunk.weights1);
+        // this.terrain.addQuadColor1(HexGridChunk.weights1);
+        // this.terrain.addQuadColor1(HexGridChunk.weights1);
+        // this.terrain.addTriangleColor1(HexGridChunk.weights1);
+        // let types = new BABYLON.Vector3(
+        //     cell.terrainTypeIndex,
+        //     cell.terrainTypeIndex,
+        //     cell.terrainTypeIndex
+        // );
+        // this.terrain.addTriangleTerrainTypes(types);
+        // this.terrain.addQuadTerrainType(types);
+        // this.terrain.addQuadTerrainType(types);
+        // this.terrain.addTriangleTerrainTypes(types);
         if (!cell.isUnderwater) {
             let reversed = cell.incomingRiver === direction;
             this.triangulateRiverQuad(centerL, centerR, m.v2, m.v4, cell.riverSurfaceY, 0.4, reversed);
@@ -2779,8 +2924,8 @@ class HexGridChunk {
     triangulateWithRiverBeginOrEnd(direction, cell, center, e) {
         let m = EdgeVertices.fromCorners(BABYLON.Vector3.Lerp(center, e.v1, 0.5), BABYLON.Vector3.Lerp(center, e.v5, 0.5));
         m.v3.y = e.v3.y;
-        this.triangulateEdgeStrip(m, HexGridChunk.color1, cell.terrainTypeIndex, e, HexGridChunk.color1, cell.terrainTypeIndex);
-        this.triangulateEdgeFan(center, m, cell.terrainTypeIndex);
+        this.triangulateEdgeStrip(m, HexGridChunk.weights1, cell.index, e, HexGridChunk.weights1, cell.index);
+        this.triangulateEdgeFan(center, m, cell.index);
         if (!cell.isUnderwater) {
             let reversed = cell.hasIncomingRiver;
             this.triangulateRiverQuad(m.v2, m.v4, e.v2, e.v4, cell.riverSurfaceY, 0.6, reversed);
@@ -2813,8 +2958,8 @@ class HexGridChunk {
             center = center.add(HexMetrics.getSecondSolidCorner(direction).scale(0.25));
         }
         let m = EdgeVertices.fromCorners(BABYLON.Vector3.Lerp(center, e.v1, 0.5), BABYLON.Vector3.Lerp(center, e.v5, 0.5));
-        this.triangulateEdgeStrip(m, HexGridChunk.color1, cell.terrainTypeIndex, e, HexGridChunk.color1, cell.terrainTypeIndex);
-        this.triangulateEdgeFan(center, m, cell.terrainTypeIndex);
+        this.triangulateEdgeStrip(m, HexGridChunk.weights1, cell.index, e, HexGridChunk.weights1, cell.index);
+        this.triangulateEdgeFan(center, m, cell.index);
         if (!cell.isUnderwater && !cell.hasRoadThroughEdge(direction)) {
             this.features.addFeature(cell, center.add(e.v1).add(e.v5).scale(1 / 3));
         }
@@ -2909,35 +3054,44 @@ class HexGridChunk {
         this.roads.addTriangle(center, mL, mR);
         this.roads.addTriangleUV(new BABYLON.Vector2(1, 0), new BABYLON.Vector2(0, 0), new BABYLON.Vector2(0, 0));
     }
-    triangulateEdgeFan(center, edge, type) {
+    triangulateEdgeFan(center, edge, index) {
         this.terrain.addTriangle(center, edge.v1, edge.v2);
         this.terrain.addTriangle(center, edge.v2, edge.v3);
         this.terrain.addTriangle(center, edge.v3, edge.v4);
         this.terrain.addTriangle(center, edge.v4, edge.v5);
-        this.terrain.addTriangleColor1(HexGridChunk.color1);
-        this.terrain.addTriangleColor1(HexGridChunk.color1);
-        this.terrain.addTriangleColor1(HexGridChunk.color1);
-        this.terrain.addTriangleColor1(HexGridChunk.color1);
-        let types = new BABYLON.Vector3(type, type, type);
-        this.terrain.addTriangleTerrainTypes(types);
-        this.terrain.addTriangleTerrainTypes(types);
-        this.terrain.addTriangleTerrainTypes(types);
-        this.terrain.addTriangleTerrainTypes(types);
+        let indices = new BABYLON.Vector3(index, index, index);
+        this.terrain.addTriangleCellData(indices, HexGridChunk.weights1);
+        this.terrain.addTriangleCellData(indices, HexGridChunk.weights1);
+        this.terrain.addTriangleCellData(indices, HexGridChunk.weights1);
+        this.terrain.addTriangleCellData(indices, HexGridChunk.weights1);
+        // this.terrain.addTriangleColor1(HexGridChunk.weights1);
+        // this.terrain.addTriangleColor1(HexGridChunk.weights1);
+        // this.terrain.addTriangleColor1(HexGridChunk.weights1);
+        // this.terrain.addTriangleColor1(HexGridChunk.weights1);
+        // let types = new BABYLON.Vector3(type, type, type);
+        // this.terrain.addTriangleTerrainTypes(types);
+        // this.terrain.addTriangleTerrainTypes(types);
+        // this.terrain.addTriangleTerrainTypes(types);
+        // this.terrain.addTriangleTerrainTypes(types);
     }
-    triangulateEdgeStrip(e1, c1, type1, e2, c2, type2, hasRoad = false) {
+    triangulateEdgeStrip(e1, w1, index1, e2, w2, index2, hasRoad = false) {
         this.terrain.addQuad(e1.v1, e1.v2, e2.v1, e2.v2);
-        this.terrain.addQuadColor2(c1, c2);
+        // this.terrain.addQuadColor2(w1, w2);
         this.terrain.addQuad(e1.v2, e1.v3, e2.v2, e2.v3);
-        this.terrain.addQuadColor2(c1, c2);
+        // this.terrain.addQuadColor2(w1, w2);
         this.terrain.addQuad(e1.v3, e1.v4, e2.v3, e2.v4);
-        this.terrain.addQuadColor2(c1, c2);
+        // this.terrain.addQuadColor2(w1, w2);
         this.terrain.addQuad(e1.v4, e1.v5, e2.v4, e2.v5);
-        this.terrain.addQuadColor2(c1, c2);
-        let types = new BABYLON.Vector3(type1, type2, type1);
-        this.terrain.addQuadTerrainType(types);
-        this.terrain.addQuadTerrainType(types);
-        this.terrain.addQuadTerrainType(types);
-        this.terrain.addQuadTerrainType(types);
+        // this.terrain.addQuadColor2(w1, w2);
+        let indices = new BABYLON.Vector3(index1, index2, index1);
+        this.terrain.addQuadCellData2(indices, w1, w2);
+        this.terrain.addQuadCellData2(indices, w1, w2);
+        this.terrain.addQuadCellData2(indices, w1, w2);
+        this.terrain.addQuadCellData2(indices, w1, w2);
+        // this.terrain.addQuadTerrainType(types);
+        // this.terrain.addQuadTerrainType(types);
+        // this.terrain.addQuadTerrainType(types);
+        // this.terrain.addQuadTerrainType(types);
         if (hasRoad) {
             this.triangulateRoadSegment(e1.v2, e1.v3, e1.v4, e2.v2, e2.v3, e2.v4);
         }
@@ -2969,7 +3123,7 @@ class HexGridChunk {
             this.triangulateCellEdgeTerraces(e1, cell, e2, neighbor, hasRoad);
         }
         else {
-            this.triangulateEdgeStrip(e1, HexGridChunk.color1, cell.terrainTypeIndex, e2, HexGridChunk.color2, neighbor.terrainTypeIndex, hasRoad);
+            this.triangulateEdgeStrip(e1, HexGridChunk.weights1, cell.index, e2, HexGridChunk.weights2, neighbor.index, hasRoad);
         }
         this.features.addWall(e1, cell, e2, neighbor, hasRiver, hasRoad);
         let nextNeighborDirection = HexDirection.next(direction), nextNeighbor = cell.getNeighbor(nextNeighborDirection);
@@ -3023,90 +3177,104 @@ class HexGridChunk {
         }
         else {
             this.terrain.addTriangle(bottom, left, right);
-            this.terrain.addTriangleColor(HexGridChunk.color1, HexGridChunk.color2, HexGridChunk.color3);
-            let types = new BABYLON.Vector3(bottomCell.terrainTypeIndex, leftCell.terrainTypeIndex, rightCell.terrainTypeIndex);
-            this.terrain.addTriangleTerrainTypes(types);
+            let indices = new BABYLON.Vector3(bottomCell.index, leftCell.index, rightCell.index);
+            this.terrain.addTriangleCellData3(indices, HexGridChunk.weights1, HexGridChunk.weights2, HexGridChunk.weights3);
+            // this.terrain.addTriangleColor(HexGridChunk.weights1, HexGridChunk.weights2, HexGridChunk.weights3);
+            // let types = new BABYLON.Vector3(
+            //     bottomCell.terrainTypeIndex,
+            //     leftCell.terrainTypeIndex,
+            //     rightCell.terrainTypeIndex 
+            // );
+            // this.terrain.addTriangleTerrainTypes(types);
         }
         this.features.addWallCorner(bottom, bottomCell, left, leftCell, right, rightCell);
     }
     triangulateCellCornerTerraces(begin, beginCell, left, leftCell, right, rightCell) {
-        let v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), c3 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color2, 1), c4 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color3, 1), types = new BABYLON.Vector3(beginCell.terrainTypeIndex, leftCell.terrainTypeIndex, rightCell.terrainTypeIndex);
+        let v3 = HexMetrics.terraceLerp(begin, left, 1), v4 = HexMetrics.terraceLerp(begin, right, 1), w3 = HexMetrics.terraceColorLerp(HexGridChunk.weights1, HexGridChunk.weights2, 1), w4 = HexMetrics.terraceColorLerp(HexGridChunk.weights1, HexGridChunk.weights3, 1), indices = new BABYLON.Vector3(beginCell.index, leftCell.index, rightCell.index);
         this.terrain.addTriangle(begin, v3, v4);
-        this.terrain.addTriangleColor(HexGridChunk.color1, c3, c4);
-        this.terrain.addTriangleTerrainTypes(types);
-        let i, v1, v2, c1, c2;
+        this.terrain.addTriangleCellData3(indices, HexGridChunk.weights1, w3, w4);
+        // this.terrain.addTriangleColor(HexGridChunk.weights1, w3, w4);
+        // this.terrain.addTriangleTerrainTypes(types);
+        let i, v1, v2, w1, w2;
         for (i = 2; i < HexMetrics.terraceSteps; i++) {
             v1 = v3;
             v2 = v4;
-            c1 = c3;
-            c2 = c4;
+            w1 = w3;
+            w2 = w4;
             v3 = HexMetrics.terraceLerp(begin, left, i);
             v4 = HexMetrics.terraceLerp(begin, right, i);
-            c3 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color2, i);
-            c4 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color3, i);
+            w3 = HexMetrics.terraceColorLerp(HexGridChunk.weights1, HexGridChunk.weights2, i);
+            w4 = HexMetrics.terraceColorLerp(HexGridChunk.weights1, HexGridChunk.weights3, i);
             this.terrain.addQuad(v1, v2, v3, v4);
-            this.terrain.addQuadColor(c1, c2, c3, c4);
-            this.terrain.addQuadTerrainType(types);
+            this.terrain.addQuadCellData4(indices, w1, w2, w3, w4);
+            // this.terrain.addQuadColor(w1, w2, w3, w4);
+            // this.terrain.addQuadTerrainType(types);
         }
         this.terrain.addQuad(v3, v4, left, right);
-        this.terrain.addQuadColor(c3, c4, HexGridChunk.color2, HexGridChunk.color3);
-        this.terrain.addQuadTerrainType(types);
+        this.terrain.addQuadCellData4(indices, w1, w2, w3, w4);
+        // this.terrain.addQuadColor(w3, w4, HexGridChunk.weights2, HexGridChunk.weights3);
+        // this.terrain.addQuadTerrainType(types);
     }
     triangulateCellCornerTerracesCliff(begin, beginCell, left, leftCell, right, rightCell) {
-        let b = Math.abs(1.0 / (rightCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(HexMetrics.perturb(begin), HexMetrics.perturb(right), b), boundryColor = BABYLON.Color4.Lerp(HexGridChunk.color1, HexGridChunk.color3, b), types = new BABYLON.Vector3(beginCell.terrainTypeIndex, leftCell.terrainTypeIndex, rightCell.terrainTypeIndex);
-        this.trinagulateCellBoundryTriangle(begin, HexGridChunk.color1, left, HexGridChunk.color2, boundry, boundryColor, types);
+        let b = Math.abs(1.0 / (rightCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(HexMetrics.perturb(begin), HexMetrics.perturb(right), b), boundryWeights = BABYLON.Color4.Lerp(HexGridChunk.weights1, HexGridChunk.weights3, b), indices = new BABYLON.Vector3(beginCell.index, leftCell.index, rightCell.index);
+        this.trinagulateCellBoundryTriangle(begin, HexGridChunk.weights1, left, HexGridChunk.weights2, boundry, boundryWeights, indices);
         if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
-            this.trinagulateCellBoundryTriangle(left, HexGridChunk.color2, right, HexGridChunk.color3, boundry, boundryColor, types);
+            this.trinagulateCellBoundryTriangle(left, HexGridChunk.weights2, right, HexGridChunk.weights3, boundry, boundryWeights, indices);
         }
         else {
             this.terrain.addTriangleUnperturbed(HexMetrics.perturb(left), HexMetrics.perturb(right), boundry);
-            this.terrain.addTriangleColor(HexGridChunk.color2, HexGridChunk.color3, boundryColor);
-            this.terrain.addTriangleTerrainTypes(types);
+            this.terrain.addTriangleCellData3(indices, HexGridChunk.weights2, HexGridChunk.weights3, boundryWeights);
+            // this.terrain.addTriangleColor(HexGridChunk.weights2, HexGridChunk.weights3, boundryWeights);
+            // this.terrain.addTriangleTerrainTypes(types);
         }
     }
     triangulateCellCornerCliffTerraces(begin, beginCell, left, leftCell, right, rightCell) {
-        let b = Math.abs(1.0 / (leftCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(HexMetrics.perturb(begin), HexMetrics.perturb(left), b), boundryColor = BABYLON.Color4.Lerp(HexGridChunk.color1, HexGridChunk.color2, b), types = new BABYLON.Vector3(beginCell.terrainTypeIndex, leftCell.terrainTypeIndex, rightCell.terrainTypeIndex);
-        this.trinagulateCellBoundryTriangle(right, HexGridChunk.color3, begin, HexGridChunk.color1, boundry, boundryColor, types);
+        let b = Math.abs(1.0 / (leftCell.elevation - beginCell.elevation)), boundry = BABYLON.Vector3.Lerp(HexMetrics.perturb(begin), HexMetrics.perturb(left), b), boundryWeights = BABYLON.Color4.Lerp(HexGridChunk.weights1, HexGridChunk.weights2, b), indices = new BABYLON.Vector3(beginCell.index, leftCell.index, rightCell.index);
+        this.trinagulateCellBoundryTriangle(right, HexGridChunk.weights3, begin, HexGridChunk.weights1, boundry, boundryWeights, indices);
         if (leftCell.getEdgeTypeForCell(rightCell) === HexEdgeType.Slope) {
-            this.trinagulateCellBoundryTriangle(left, HexGridChunk.color2, right, HexGridChunk.color3, boundry, boundryColor, types);
+            this.trinagulateCellBoundryTriangle(left, HexGridChunk.weights2, right, HexGridChunk.weights3, boundry, boundryWeights, indices);
         }
         else {
             this.terrain.addTriangleUnperturbed(HexMetrics.perturb(left), HexMetrics.perturb(right), boundry);
-            this.terrain.addTriangleColor(HexGridChunk.color2, HexGridChunk.color3, boundryColor);
-            this.terrain.addTriangleTerrainTypes(types);
+            this.terrain.addTriangleCellData3(indices, HexGridChunk.weights2, HexGridChunk.weights3, boundryWeights);
+            // this.terrain.addTriangleColor(HexGridChunk.weights2, HexGridChunk.weights3, boundryWeights);
+            // this.terrain.addTriangleTerrainTypes(types);
         }
     }
-    trinagulateCellBoundryTriangle(begin, beginColor, left, leftColor, boundry, boundryColor, types) {
-        let v2 = HexMetrics.perturb(HexMetrics.terraceLerp(begin, left, 1)), c2 = HexMetrics.terraceColorLerp(beginColor, leftColor, 1);
+    trinagulateCellBoundryTriangle(begin, beginWeights, left, leftWeights, boundry, boundryWeights, indices) {
+        let v2 = HexMetrics.perturb(HexMetrics.terraceLerp(begin, left, 1)), w2 = HexMetrics.terraceColorLerp(beginWeights, leftWeights, 1);
         this.terrain.addTriangleUnperturbed(HexMetrics.perturb(begin), v2, boundry);
-        this.terrain.addTriangleColor(beginColor, c2, boundryColor);
-        this.terrain.addTriangleTerrainTypes(types);
-        let i, v1, c1;
+        this.terrain.addTriangleCellData3(indices, beginWeights, w2, boundryWeights);
+        // this.terrain.addTriangleColor(beginWeights, w2, boundryWeights);
+        // this.terrain.addTriangleTerrainTypes(types);
+        let i, v1, w1;
         for (i = 2; i < HexMetrics.terraceSteps; i++) {
             v1 = v2;
-            c1 = c2;
+            w1 = w2;
             v2 = HexMetrics.perturb(HexMetrics.terraceLerp(begin, left, i));
-            c2 = HexMetrics.terraceColorLerp(beginColor, leftColor, i);
+            w2 = HexMetrics.terraceColorLerp(beginWeights, leftWeights, i);
             this.terrain.addTriangleUnperturbed(v1, v2, boundry);
-            this.terrain.addTriangleColor(c1, c2, boundryColor);
-            this.terrain.addTriangleTerrainTypes(types);
+            this.terrain.addTriangleCellData3(indices, w1, w2, boundryWeights);
+            // this.terrain.addTriangleColor(c1, w2, boundryWeights);
+            // this.terrain.addTriangleTerrainTypes(types);
         }
         this.terrain.addTriangleUnperturbed(v2, HexMetrics.perturb(left), boundry);
-        this.terrain.addTriangleColor(c2, leftColor, boundryColor);
-        this.terrain.addTriangleTerrainTypes(types);
+        this.terrain.addTriangleCellData3(indices, w2, leftWeights, boundryWeights);
+        // this.terrain.addTriangleColor(w2, leftWeights, boundryWeights);
+        // this.terrain.addTriangleTerrainTypes(types);
     }
     triangulateCellEdgeTerraces(begin, beginCell, end, endCell, hasRoad) {
-        let e2 = EdgeVertices.terraceLerp(begin, end, 1), c2 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color2, 1), t1 = beginCell.terrainTypeIndex, t2 = endCell.terrainTypeIndex;
-        this.triangulateEdgeStrip(begin, HexGridChunk.color1, t1, e2, c2, t2, hasRoad);
+        let e2 = EdgeVertices.terraceLerp(begin, end, 1), w2 = HexMetrics.terraceColorLerp(HexGridChunk.weights1, HexGridChunk.weights2, 1), i1 = beginCell.index, i2 = endCell.index;
+        this.triangulateEdgeStrip(begin, HexGridChunk.weights1, i1, e2, w2, i2, hasRoad);
         let e1, c1;
         for (let i = 2; i < HexMetrics.terraceSteps; i++) {
             e1 = e2;
-            c1 = c2;
+            c1 = w2;
             e2 = EdgeVertices.terraceLerp(begin, end, i);
-            c2 = HexMetrics.terraceColorLerp(HexGridChunk.color1, HexGridChunk.color2, i);
-            this.triangulateEdgeStrip(e1, c1, t1, e2, c2, t2, hasRoad);
+            w2 = HexMetrics.terraceColorLerp(HexGridChunk.weights1, HexGridChunk.weights2, i);
+            this.triangulateEdgeStrip(e1, c1, i1, e2, w2, i2, hasRoad);
         }
-        this.triangulateEdgeStrip(e2, c2, t1, end, HexGridChunk.color2, t2, hasRoad);
+        this.triangulateEdgeStrip(e2, w2, i1, end, HexGridChunk.weights2, i2, hasRoad);
     }
     triangulateRoadSegment(v1, v2, v3, v4, v5, v6) {
         this.roads.addQuad(v1, v2, v4, v5);
@@ -3138,10 +3306,16 @@ class HexGridChunk {
     doRefresh() {
         this.triangulate();
     }
+    touch() {
+        HexGrid.CHUNKS_TO_TOUCH.set(this.terrain.name, this);
+    }
+    doTouch() {
+        this.terrain.touch();
+    }
 }
-HexGridChunk.color1 = new BABYLON.Color4(1, 0, 0, 1);
-HexGridChunk.color2 = new BABYLON.Color4(0, 1, 0, 1);
-HexGridChunk.color3 = new BABYLON.Color4(0, 0, 1, 1);
+HexGridChunk.weights1 = new BABYLON.Color4(1, 0, 0, 1);
+HexGridChunk.weights2 = new BABYLON.Color4(0, 1, 0, 1);
+HexGridChunk.weights3 = new BABYLON.Color4(0, 0, 1, 1);
 export class HexGrid {
     constructor(scene) {
         this.cellCountX = 20;
@@ -3159,11 +3333,16 @@ export class HexGrid {
         HexGrid.CHUNKS_TO_REFRESH.forEach((c, k, _) => {
             c.doRefresh();
         });
+        HexGrid.CHUNKS_TO_TOUCH.forEach((c, k, _) => {
+            c.doTouch();
+        });
         HexGrid.CHUNKS_TO_REFRESH = new Map();
+        HexGrid.CHUNKS_TO_TOUCH = new Map();
     }
     awake() {
         this._isLoaded = true;
         HexMetrics.initializeHashGrid(1234);
+        this.cellShaderData = new HexCellShaderData();
         this.createMap(this.cellCountX, this.cellCountZ);
         this._onLoaded.forEach(f => f());
         this._onLoaded = null;
@@ -3227,6 +3406,8 @@ export class HexGrid {
         this.cellCountZ = cellCountZ;
         this.chunkCountX = cellCountX / HexMetrics.chunkSizeX;
         this.chunkCountZ = cellCountZ / HexMetrics.chunkSizeZ;
+        this.cellShaderData.init(cellCountX, cellCountZ, this._scene);
+        Prefabs.hexCellShaderData = this.cellShaderData;
         HexMetrics.initializeHashGrid(1234);
         this.makeChunks();
         this.makeCells();
@@ -3274,9 +3455,11 @@ export class HexGrid {
     makeCell(x, z, i) {
         let cell = new HexCell(`hex_cell_${x}_${z}`, this._scene), cellPosition = new BABYLON.Vector3((x + z * 0.5 - Math.floor(z / 2)) * (HexMetrics.innerRadius * 2.0), 0.0, z * (HexMetrics.outerRadius * 1.5));
         cell.coordinates = HexCoordinates.fromOffsetCoordinates(x, z);
+        cell.index = i;
         cell.isVisible = true;
         cell.isPickable = false;
         cell.cellPosition = cellPosition;
+        cell.shaderData = this.cellShaderData;
         // Cell material (dynamic text texture for displaying e.g. position/distance/...)
         let material = new BABYLON.StandardMaterial(`${x}_${z}-material`, this._scene), textTexture = this.makeCellText(cell.coordinates.x.toString());
         material.diffuseTexture = textTexture;
@@ -3498,6 +3681,7 @@ export class HexGrid {
     }
 }
 HexGrid.CHUNKS_TO_REFRESH = new Map();
+HexGrid.CHUNKS_TO_TOUCH = new Map();
 var OptionalToggle;
 (function (OptionalToggle) {
     OptionalToggle[OptionalToggle["Ignore"] = 0] = "Ignore";
