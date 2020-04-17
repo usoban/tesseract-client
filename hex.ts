@@ -644,7 +644,7 @@ class Prefabs {
     private static WATER_COLOR: BABYLON.Color4 = BABYLON.Color4.FromHexString('#002f9eff');
 
     public static hexCellShaderData: HexCellShaderData;
-    private static _terrainMaterial: BABYLON.ShaderMaterial;
+    private static _terrainMaterial: BABYLON.PBRCustomMaterial;
     private static _riverMaterial: BABYLON.ShaderMaterial;
     private static _roadMaterial: BABYLON.ShaderMaterial;
     private static _waterMaterial: BABYLON.ShaderMaterial;
@@ -729,8 +729,8 @@ class Prefabs {
     `;
 
     private static _cellDataShaderFn = `
-        uniform sampler2D hexCellData;
-        uniform vec4 hexCellDataTexelSize;
+        //uniform sampler2D hexCellData;
+        //uniform vec4 hexCellDataTexelSize;
 
         vec4 GetCellData(vec3 texcoord2, int idx) {
             vec2 uv;
@@ -741,7 +741,7 @@ class Prefabs {
             uv.y = (row + 0.5) * hexCellDataTexelSize.y;
             
             vec4 data = textureLod(hexCellData, uv, 0.0);
-            data.w *= 255.0;
+            //data.w *= 255.0;
 
             return data;
         }
@@ -781,71 +781,60 @@ class Prefabs {
     }
 
     public static toggleTerrainGrid(): void {
-        Prefabs.GRID_STATUS = !Prefabs.GRID_STATUS;
+        // Prefabs.GRID_STATUS = !Prefabs.GRID_STATUS;
 
-        if (Prefabs._terrainMaterial) {
-            if (Prefabs.GRID_STATUS) {
-                Prefabs._terrainMaterial.options.defines.push(Prefabs.GRID_ON);
-            }
-            else {
-                Prefabs._terrainMaterial.options.defines.splice(
-                    Prefabs._terrainMaterial.options.defines.indexOf(Prefabs.GRID_ON),
-                    1
-                );
-            }
+        // if (Prefabs._terrainMaterial) {
+        //     if (Prefabs.GRID_STATUS) {
+        //         Prefabs._terrainMaterial.options.defines.push(Prefabs.GRID_ON);
+        //     }
+        //     else {
+        //         Prefabs._terrainMaterial.options.defines.splice(
+        //             Prefabs._terrainMaterial.options.defines.indexOf(Prefabs.GRID_ON),
+        //             1
+        //         );
+        //     }
 
-            Prefabs._terrainMaterial.markAsDirty(1);
-        }
+        //     Prefabs._terrainMaterial.markAsDirty(1);
+        // }
     }
 
     private static terrainMaterial(scene: BABYLON.Scene) {
         if (!Prefabs._terrainMaterial) {
-            BABYLON.Effect.ShadersStore['terrainVertexShader'] = `
-                precision highp float;
-                
-                attribute vec3 position;
-                attribute vec2 uv;
-                attribute vec3 cellIndex;
-                attribute vec4 color;
-                
-                uniform mat4 worldViewProjection;
+            Prefabs._terrainMaterial = new BABYLON.PBRCustomMaterial('terrain', scene);
 
+            Prefabs._terrainMaterial.Vertex_Definitions(`
+                attribute vec3 cellIndex;
+                attribute vec4 cellWeight;
                 varying vec3 vPosition;
-                varying vec2 vUV;
                 varying vec3 vTerrain;
-                varying vec4 vColor;
+                varying vec3 vVisibility;
+                varying vec4 vCellWeight;
 
                 ${Prefabs._cellDataShaderFn}
+            `);
+            Prefabs._terrainMaterial.Vertex_MainEnd(`
+                vPosition = position;
+                vCellWeight = color;
 
-                void main(void) {
-                
-                    gl_Position = worldViewProjection * vec4(position, 1.0);
-                    
-                    vPosition = position;
-                    vColor = color;
+                vec4 cell0 = GetCellData(cellIndex, 0);
+                vec4 cell1 = GetCellData(cellIndex, 1);
+                vec4 cell2 = GetCellData(cellIndex, 2);
 
-                    vec4 cell0 = GetCellData(cellIndex, 0);
-                    vec4 cell1 = GetCellData(cellIndex, 1);
-                    vec4 cell2 = GetCellData(cellIndex, 2);
+                vTerrain.x = cell0.w;
+                vTerrain.y = cell1.w;
+                vTerrain.z = cell2.w;
 
-                    vTerrain.x = cell0.w;
-                    vTerrain.y = cell1.w;
-                    vTerrain.z = cell2.w;
-                }
-            `;
-
-            BABYLON.Effect.ShadersStore['terrainPixelShader'] = `
-                precision highp float;
-                
-                uniform sampler2D textures[5];
-                uniform sampler2D grid;
-                
+                vVisibility.x = mix(0.25, 1.0, cell0.x);
+                vVisibility.y = mix(0.25, 1.0, cell1.x);
+                vVisibility.z = mix(0.25, 1.0, cell2.x);
+            `);
+            Prefabs._terrainMaterial.Fragment_Definitions(`                
                 varying vec3 vPosition;
-                varying vec2 vUV;
-                varying vec4 vColor;
                 varying vec3 vTerrain;
+                varying vec3 vVisibility;
+                varying vec4 vCellWeight;
                 
-                vec4 tex2DArray(sampler2D texturesArray[5], vec2 uv, int idx) {
+                vec4 tex2DArray(vec2 uv, int idx) {
                     // NOTE: apparently, we cannot do just this:
                     //      return texture2D(texturesArray[idx], uv);
                     //
@@ -854,19 +843,22 @@ class Prefabs {
                     // Not sure if this is exactly it, but the workaround was inspired by 'non-uniform flow control':
                     // https://www.khronos.org/opengl/wiki/Sampler_(GLSL)#Non-uniform_flow_control
 
-                    vec4 s0 = texture2D(texturesArray[0], uv);
-                    vec4 s1 = texture2D(texturesArray[1], uv);
-                    vec4 s2 = texture2D(texturesArray[2], uv);
-                    vec4 s3 = texture2D(texturesArray[3], uv);
-                    vec4 s4 = texture2D(texturesArray[4], uv);
+                    vec4 s0 = texture2D(terrain_sand, uv);
+                    vec4 s1 = texture2D(terrain_grass, uv);
+                    vec4 s2 = texture2D(terrain_mud, uv);
+                    vec4 s3 = texture2D(terrain_stone, uv);
+                    vec4 s4 = texture2D(terrain_snow, uv);
 
                     if (idx == 0) {
+                        // return s;
                         return s0;
                     }
                     if (idx == 1) {
+                        // return s;
                         return s1;
                     }
                     if (idx == 2) {
+                        // return s;
                         return s2;
                     }
                     if (idx == 3) {
@@ -877,22 +869,28 @@ class Prefabs {
                     }
 
                     // Return pure red color in all other (invalid) cases.
-                    return vec4(1.0, 0.0, 0.0, 1.0);
+                    return vec4(1.0, 1.0, 0.0, 1.0);
                 }
 
-                vec4 getTerrainColor(sampler2D texturesArray[5], vec2 pos, vec3 terrain, vec4 color, int idx) {
-                    vec4 c = tex2DArray(texturesArray, pos * 0.02, int(terrain[idx]));
+                vec4 getTerrainColor(vec2 pos, int idx) {
+                    vec4 c = tex2DArray(pos * 0.02, int(vTerrain[idx]));
+                    
+                    // vec4 c_tmp = c * vColor[idx];
+                    // vec4 c_tmp2 = c_tmp * vVisibility[idx];
+                    // return vec4(c_tmp2.rbg, c_tmp.a);
+                    // return c * (vColor[idx]);// * vVisibility[idx]);
 
-                    return c * color[idx];
+                    return c;// * vCellWeight[idx]; // * vVisibility[idx];
                 }
+            `);
+            Prefabs._terrainMaterial.Fragment_Before_FragColor(`
+                    // vec4 c = (
+                    //     getTerrainColor(textures, vPosition.xz, 0) +
+                    //     getTerrainColor(textures, vPosition.xz, 1) +
+                    //     getTerrainColor(textures, vPosition.xz, 2)
+                    // );
 
-                void main(void)
-                {
-                    vec4 c = (
-                        getTerrainColor(textures, vPosition.xz, vTerrain, vColor, 0) +
-                        getTerrainColor(textures, vPosition.xz, vTerrain, vColor, 1) +
-                        getTerrainColor(textures, vPosition.xz, vTerrain, vColor, 2)
-                    );
+                    vec4 c = getTerrainColor(vPosition.xz, 0);
 
                     vec2 gridUV = vPosition.xz;
                     gridUV.x *= 1.0 / (4.0 * 8.66025404);
@@ -904,43 +902,193 @@ class Prefabs {
                     gridC = texture2D(grid, gridUV);
                     #endif
 
-                    gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
-                }
-            `;
+                    gridC = texture2D(grid, gridUV);
 
-            Prefabs._terrainMaterial = new BABYLON.ShaderMaterial(
-                'terrainPixelShader', 
-                scene,
-                {
-                    vertex: 'terrain',
-                    fragment: 'terrain'
-                },
-                {
-                    attributes: ['position', 'color', 'uv', 'cellIndex'],
-                    uniforms: ['worldViewProjection', 'hexCellDataTexelSize'],
-                    samplers: ['textures', 'grid', 'hexCellData'],
-                    defines: Prefabs.GRID_STATUS ? [Prefabs.GRID_ON] : []
-                }
-            );
+                    finalColor.rgb = finalColor.rgb * c.rgb * gridC.rgb; //finalColor.rgb * c.rgb * gridC.rgb;
+            `);
 
             Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
+            Prefabs._terrainMaterial.metallic = 0.0;
+            Prefabs._terrainMaterial.roughness = 0.5;
 
-            Prefabs._terrainMaterial.setTextureArray('textures', [
-                Prefabs._sandTexture,
-                Prefabs._grassTexture,
-                Prefabs._mudTexture,
-                Prefabs._stoneTexture,
-                Prefabs._snowTexture
-            ]);
+            Prefabs._terrainMaterial.AddUniform('terrain_sand', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('terrain_grass', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('terrain_mud', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('terrain_stone', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('terrain_snow', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('grid', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('hexCellData', 'sampler2D', null);
+            Prefabs._terrainMaterial.AddUniform('hexCellDataTexelSize', 'vec4', null);
+            Prefabs._terrainMaterial.AddAttribute('cellIndex');
+            Prefabs._terrainMaterial.AddAttribute('cellWeight');
 
-            Prefabs._terrainMaterial.setTexture('grid', Prefabs._gridTexture);
+            Prefabs._terrainMaterial.onBindObservable.add(() => {
+                // console.log('binding');
+                Prefabs._terrainMaterial.getEffect().setTexture('grid', Prefabs._gridTexture);
+                Prefabs._terrainMaterial.getEffect().setTexture('terrain_sand', Prefabs._sandTexture);
+                Prefabs._terrainMaterial.getEffect().setTexture('terrain_grass', Prefabs._grassTexture);
+                Prefabs._terrainMaterial.getEffect().setTexture('terrain_mud', Prefabs._mudTexture);
+                Prefabs._terrainMaterial.getEffect().setTexture('terrain_stone', Prefabs._stoneTexture);
+                Prefabs._terrainMaterial.getEffect().setTexture('terrain_snow', Prefabs._snowTexture);
+                Prefabs._terrainMaterial.getEffect().setTexture('hexCellData', Prefabs.hexCellShaderData.getTexture());
+                Prefabs._terrainMaterial.getEffect().setVector4('hexCellDataTexelSize', Prefabs.hexCellShaderData.getTexelSize());
 
-            if (!Prefabs.hexCellShaderData) {
-                throw new Error('HexCellData not ready yet.');
-            } else {
-                Prefabs._terrainMaterial.setTexture('hexCellData', Prefabs.hexCellShaderData.getTexture());
-                Prefabs._terrainMaterial.setVector4('hexCellDataTexelSize', this.hexCellShaderData.getTexelSize());
-            }
+                console.log(Prefabs._terrainMaterial);//  .defines.replace('#define VERTEXCOLOR', ''));
+            });
+
+            // BABYLON.Effect.ShadersStore['terrainVertexShader'] = `
+            //     precision highp float;
+                
+            //     attribute vec3 position;
+            //     attribute vec2 uv;
+            //     attribute vec3 cellIndex;
+            //     attribute vec4 color;
+                
+            //     uniform mat4 worldViewProjection;
+
+            //     varying vec3 vPosition;
+            //     varying vec2 vUV;
+            //     varying vec3 vTerrain;
+            //     varying vec3 vVisibility;
+            //     varying vec4 vColor;
+
+            //     ${Prefabs._cellDataShaderFn}
+
+            //     void main(void) {
+                
+            //         gl_Position = worldViewProjection * vec4(position, 1.0);
+                    
+            //         vPosition = position;
+            //         vColor = color;
+
+            //         vec4 cell0 = GetCellData(cellIndex, 0);
+            //         vec4 cell1 = GetCellData(cellIndex, 1);
+            //         vec4 cell2 = GetCellData(cellIndex, 2);
+
+            //         vTerrain.x = cell0.w;
+            //         vTerrain.y = cell1.w;
+            //         vTerrain.z = cell2.w;
+
+            //         vVisibility.x = mix(0.25, 1.0, cell0.x);
+            //         vVisibility.y = mix(0.25, 1.0, cell1.x);
+            //         vVisibility.z = mix(0.25, 1.0, cell2.x);
+            //         // vVisibility = mix(0.25, 1.0, vVisibility);
+            //     }
+            // `;
+
+            // BABYLON.Effect.ShadersStore['terrainPixelShader'] = `
+            //     precision highp float;
+                
+            //     uniform sampler2D textures[5];
+            //     uniform sampler2D grid;
+                
+            //     varying vec3 vPosition;
+            //     varying vec2 vUV;
+            //     varying vec4 vColor;
+            //     varying vec3 vTerrain;
+            //     varying vec3 vVisibility;
+                
+            //     vec4 tex2DArray(sampler2D texturesArray[5], vec2 uv, int idx) {
+            //         // NOTE: apparently, we cannot do just this:
+            //         //      return texture2D(texturesArray[idx], uv);
+            //         //
+            //         // We need to sample all textures otherwise the results are incorrect 
+            //         // on some hardware (e.g., on AMD RX580 it did not work, but on Intel HD it did).
+            //         // Not sure if this is exactly it, but the workaround was inspired by 'non-uniform flow control':
+            //         // https://www.khronos.org/opengl/wiki/Sampler_(GLSL)#Non-uniform_flow_control
+
+            //         vec4 s0 = texture2D(texturesArray[0], uv);
+            //         vec4 s1 = texture2D(texturesArray[1], uv);
+            //         vec4 s2 = texture2D(texturesArray[2], uv);
+            //         vec4 s3 = texture2D(texturesArray[3], uv);
+            //         vec4 s4 = texture2D(texturesArray[4], uv);
+
+            //         if (idx == 0) {
+            //             return s0;
+            //         }
+            //         if (idx == 1) {
+            //             return s1;
+            //         }
+            //         if (idx == 2) {
+            //             return s2;
+            //         }
+            //         if (idx == 3) {
+            //             return s3;
+            //         }
+            //         if (idx == 4) {
+            //             return s4;
+            //         }
+
+            //         // Return pure red color in all other (invalid) cases.
+            //         return vec4(1.0, 0.0, 0.0, 1.0);
+            //     }
+
+            //     vec4 getTerrainColor(sampler2D texturesArray[5], vec2 pos, int idx) {
+            //         vec4 c = tex2DArray(texturesArray, pos * 0.02, int(vTerrain[idx]));
+                    
+            //         // vec4 c_tmp = c * vColor[idx];
+            //         // vec4 c_tmp2 = c_tmp * vVisibility[idx];
+            //         // return vec4(c_tmp2.rbg, c_tmp.a);
+            //         // return c * (vColor[idx]);// * vVisibility[idx]);
+
+            //         return c * vColor[idx]; // * vVisibility[idx];
+            //     }
+
+            //     void main(void)
+            //     {
+            //         vec4 c = (
+            //             getTerrainColor(textures, vPosition.xz, 0) +
+            //             getTerrainColor(textures, vPosition.xz, 1) +
+            //             getTerrainColor(textures, vPosition.xz, 2)
+            //         );
+
+            //         vec2 gridUV = vPosition.xz;
+            //         gridUV.x *= 1.0 / (4.0 * 8.66025404);
+            //         gridUV.y *= 1.0 / (2.0 * 15.0);
+
+            //         vec4 gridC = vec4(1.0, 1.0, 1.0, 1.0);
+                    
+            //         #if defined(GRID_ON)
+            //         gridC = texture2D(grid, gridUV);
+            //         #endif
+
+            //         gl_FragColor = vec4(c.rgb * gridC.rgb, c.a);
+            //     }
+            // `;
+
+            // Prefabs._terrainMaterial = new BABYLON.ShaderMaterial(
+            //     'terrainPixelShader', 
+            //     scene,
+            //     {
+            //         vertex: 'terrain',
+            //         fragment: 'terrain'
+            //     },
+            //     {
+            //         attributes: ['position', 'color', 'uv', 'cellIndex'],
+            //         uniforms: ['worldViewProjection', 'hexCellDataTexelSize'],
+            //         samplers: ['textures', 'grid', 'hexCellData'],
+            //         defines: Prefabs.GRID_STATUS ? [Prefabs.GRID_ON] : []
+            //     }
+            // );
+
+            // Prefabs._terrainMaterial.sideOrientation = BABYLON.Orientation.CW;
+
+            // Prefabs._terrainMaterial.setTextureArray('textures', [
+            //     Prefabs._sandTexture,
+            //     Prefabs._grassTexture,
+            //     Prefabs._mudTexture,
+            //     Prefabs._stoneTexture,
+            //     Prefabs._snowTexture
+            // ]);
+
+            // Prefabs._terrainMaterial.setTexture('grid', Prefabs._gridTexture);
+
+            // if (!Prefabs.hexCellShaderData) {
+            //     throw new Error('HexCellData not ready yet.');
+            // } else {
+            //     Prefabs._terrainMaterial.setTexture('hexCellData', Prefabs.hexCellShaderData.getTexture());
+            //     Prefabs._terrainMaterial.setVector4('hexCellDataTexelSize', this.hexCellShaderData.getTexelSize());
+            // }
         }
 
         return Prefabs._terrainMaterial;
@@ -2894,8 +3042,12 @@ class HexMesh extends BABYLON.Mesh {
         vertexData.normals = normals;
 
         if (this._useCellData) {
+            // vertexData.colors = this._cellWeights;
             vertexData.colors = this._cellWeights;
-            this.setVerticesData('cellIndex', this._cellIndices, false, 3); // TODO: why is this not updatable?
+            vertexData.uvs2 = this._cellIndices;
+            // vertexData.uvs5
+            // this.setVerticesData(BABYLON.VertexBuffer.UV5Kind, this._cellWeights, true, 4);
+            // this.setVerticesData(BABYLON.VertexBuffer.UV2Kind, this._cellIndices, true, 3); // TODO: why is this not updatable?
         }
         if(this._useUVCoordinates) {
             vertexData.uvs = this._uvs;

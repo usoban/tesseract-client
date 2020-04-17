@@ -79,6 +79,7 @@ declare module BABYLON {
         Builder(shaderName: string, uniforms: string[], uniformBuffers: string[], samplers: string[], defines: BABYLON.StandardMaterialDefines): string;
         constructor(name: string, scene: BABYLON.Scene);
         AddUniform(name: string, kind: string, param: any): CustomMaterial;
+        AddAttribute(name: string): CustomMaterial;
         Fragment_Begin(shaderPart: string): CustomMaterial;
         Fragment_Definitions(shaderPart: string): CustomMaterial;
         Fragment_MainBegin(shaderPart: string): CustomMaterial;
@@ -131,6 +132,7 @@ declare module BABYLON {
         Builder(shaderName: string, uniforms: string[], uniformBuffers: string[], samplers: string[], defines: BABYLON.PBRMaterialDefines): string;
         constructor(name: string, scene: BABYLON.Scene);
         AddUniform(name: string, kind: string, param: any): PBRCustomMaterial;
+        AddAttribute(name: string): PBRCustomMaterial;
         Fragment_Begin(shaderPart: string): PBRCustomMaterial;
         Fragment_Definitions(shaderPart: string): PBRCustomMaterial;
         Fragment_MainBegin(shaderPart: string): PBRCustomMaterial;
