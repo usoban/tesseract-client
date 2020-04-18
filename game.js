@@ -1,6 +1,7 @@
 import { HexGridFreeCameraMouseInput } from "./hex_camera.js";
 import { HexGrid, HexMapEditor, HexGUI } from "./hex.js";
 import { Socket } from "./phoenix.js";
+import { EntityManager } from "./tesseract/entity_manager.js";
 export var Game;
 (function (Game) {
     class Client {
@@ -10,10 +11,11 @@ export var Game;
             this._engine = new BABYLON.Engine(this._canvas, true);
         }
         createScene() {
-            this._state = new Game.State();
-            this._net = new Game.Net(this._state);
             // Create a basic BJS Scene object.
             this._scene = new BABYLON.Scene(this._engine);
+            this._entityManager = new EntityManager(this._scene);
+            this._state = new Game.State();
+            this._net = new Game.Net(this._state, this._entityManager);
             // this._scene.clearColor = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
             this._utilLayer = new BABYLON.UtilityLayerRenderer(this._scene);
             // Create a FreeCamera, and set its position to (x:0, y:5, z:-10).
@@ -122,9 +124,10 @@ export var Game;
     }
     Game.State = State;
     class Net {
-        constructor(gameState) {
+        constructor(gameState, entityManager) {
             this._serverAddress = 'ws://localhost:4000/socket';
             this._gameState = gameState;
+            this._entityManager = entityManager;
         }
         set serverAddress(serverAddr) {
             this._serverAddress = serverAddr;
@@ -140,7 +143,28 @@ export var Game;
         join(grid, gameParams) {
             const loadGrid = (joinMsg) => {
                 grid.onLoaded(() => {
-                    grid.loadFromObject(joinMsg.grid);
+                    let initialGrid = joinMsg.grid;
+                    Object.keys(initialGrid.cells).forEach(coordinates => {
+                        let networkCell = initialGrid.cells[coordinates];
+                        // Map property names.
+                        let cell = {
+                            coordinates: networkCell.coordinates,
+                            elevation: networkCell.elevation,
+                            entities: networkCell.entities,
+                            farmLevel: networkCell.farm_level,
+                            hasIncomingRiver: networkCell.has_incoming_river,
+                            hasOutgoingRiver: networkCell.has_outgoing_river,
+                            plantLevel: networkCell.plant_level,
+                            roads: networkCell.roads,
+                            specialIndex: networkCell.special_index,
+                            terrainTypeIndex: networkCell.terrain_type_index,
+                            walled: networkCell.walled,
+                            waterLevel: networkCell.water_level
+                        };
+                        this._entityManager.addEntity(`hex_cell_${coordinates}`, cell);
+                    });
+                    initialGrid.cells = Object.keys(initialGrid.cells).map(coordinates => this._entityManager.evaluate(`hex_cell_${coordinates}`));
+                    grid.loadFromObject(initialGrid);
                 });
             };
             const joinGame = () => {

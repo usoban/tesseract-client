@@ -2,6 +2,7 @@ import { HexGridFreeCameraMouseInput } from "./hex_camera.js"
 import { HexGrid, HexMapEditor, HexGUI } from "./hex.js"
 import { Socket, Channel } from "./phoenix.js";
 import { Commands } from "./commands.js"
+import { EntityManager } from "./tesseract/entity_manager.js";
 
 export namespace Game {
     export class Client {
@@ -15,6 +16,7 @@ export namespace Game {
         private _hexMapEditor: HexMapEditor;
         private _net: Game.Net;
         private _state: Game.State;
+        private _entityManager: EntityManager;
         private _gui: HexGUI;
 
         constructor(canvasElement : string) {
@@ -24,10 +26,11 @@ export namespace Game {
         }
 
         createScene() : void {
-            this._state = new Game.State();
-            this._net = new Game.Net(this._state);
             // Create a basic BJS Scene object.
             this._scene = new BABYLON.Scene(this._engine);
+            this._entityManager = new EntityManager(this._scene);
+            this._state = new Game.State();
+            this._net = new Game.Net(this._state, this._entityManager);
             // this._scene.clearColor = BABYLON.Color4.FromColor3(BABYLON.Color3.White());
 
             this._utilLayer = new BABYLON.UtilityLayerRenderer(this._scene);
@@ -81,22 +84,6 @@ export namespace Game {
                 HexMapEditor.POINTER_BLOCKED_BY_GUI = false;
             });
         }
-        
-
-        // parseQueryString(query: string): Object {
-        //     const reducer = (dict: Object, [k, v]): Object => {
-        //         dict[k] = v;
-        //         return dict;
-        //     };
-
-        //     return (
-        //         query
-        //         .substr(1)
-        //         .split("&")
-        //         .map(kv => kv.split("="))
-        //         .reduce(reducer, {})
-        //     );
-        // }
     }
 
     export class State {
@@ -187,12 +174,14 @@ export namespace Game {
         private _gameId: string;
         private _playerId: string;
         private _gameState: Game.State;
+        private _entityManager: EntityManager;
         private _socket: Socket;
         private _gameChannel: Channel;
         private _playerChannel: Channel;
 
-        constructor(gameState: Game.State) {
+        constructor(gameState: Game.State, entityManager: EntityManager) {
             this._gameState = gameState;
+            this._entityManager = entityManager;
         }
 
         set serverAddress(serverAddr: string) {
@@ -212,7 +201,34 @@ export namespace Game {
         join(grid: HexGrid, gameParams: any): void {
             const loadGrid = (joinMsg) => {
                 grid.onLoaded(() => {
-                    grid.loadFromObject(joinMsg.grid);
+                    let initialGrid = joinMsg.grid;
+
+                    Object.keys(initialGrid.cells).forEach(coordinates => {
+                        let networkCell = initialGrid.cells[coordinates];
+
+
+                        // Map property names.
+                        let cell = {
+                            coordinates: networkCell.coordinates,
+                            elevation: networkCell.elevation,
+                            entities: networkCell.entities,
+                            farmLevel: networkCell.farm_level,
+                            hasIncomingRiver: networkCell.has_incoming_river,
+                            hasOutgoingRiver: networkCell.has_outgoing_river,
+                            plantLevel: networkCell.plant_level,
+                            roads: networkCell.roads,
+                            specialIndex: networkCell.special_index,
+                            terrainTypeIndex: networkCell.terrain_type_index,
+                            walled: networkCell.walled,
+                            waterLevel: networkCell.water_level
+                        };
+
+                        this._entityManager.addEntity(`hex_cell_${coordinates}`, cell);
+                    });
+
+                    initialGrid.cells = Object.keys(initialGrid.cells).map(coordinates => this._entityManager.evaluate(`hex_cell_${coordinates}`));
+
+                    grid.loadFromObject(initialGrid);
                 });
             };
 
